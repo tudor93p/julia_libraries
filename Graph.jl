@@ -111,9 +111,14 @@ end
 function Plot_Graph(g;fname="graph",nodelabel=string,edgelabel=e->"",colorrule=i->1)
 
 
-	bgcolors = ["white","green","red","blue","magenta","cyan","orange"]
+	bgcolors = ["green","red","olive","blue","yellow","magenta","brown","cyan","orange"]
+
+
+
+
+
 	
-	color(i) = bgcolors[colorrule(i)%length(bgcolors)+1]
+	color(i) = colorrule(i)==0 ? "white" : bgcolors[colorrule(i)%length(bgcolors)+1]
 	
 	p = TikzGraphs.plot(
 				g,

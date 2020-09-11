@@ -4,7 +4,8 @@ module GreensFunctions
 import LinearAlgebra; const LA = LinearAlgebra
 ##import SparseArrays; const SpA = SparseArrays
 
-import Utils,Operators,Graph,LayeredSystem
+import Utils,Operators,TBmodel
+import Graph,LayeredSystem
 
 
 #===========================================================================#
@@ -76,6 +77,19 @@ SelfEn(args...) = sum(SelfEn.(args))
 
 
 
+
+#===========================================================================#
+#
+# Decay width
+#
+#---------------------------------------------------------------------------#
+
+
+DecayWidth(SE::AbstractMatrix) = 1im*(SE-SE')
+
+DecayWidth(U::AbstractMatrix,g::AbstractMatrix) = DecayWidth(SelfEn(U,g))
+
+
 #===========================================================================#
 #
 #	Helper functions for dealing with the physical system stored in the graph
@@ -85,18 +99,36 @@ SelfEn(args...) = sum(SelfEn.(args))
 
 function GraphLayeredSystem_Utils(g)
 
-	node = Graph.node_by_prop!(g,:name)
-	
+	get_prop(p) = Graph.get_prop(g,p)
+
+	get_prop(p,ns...) = Graph.get_prop(g,ns...,p)
+
+
+	node0 = Graph.node_by_prop!(g,:name)
+
+
+
+	function node(T::String,I::Int64)
+
+		occursin("Lead",T) && return node0(T,min(get_prop(:UCsLeads),I))
+
+		return node0(T,I) 
+	end
+
+	node((T,I)) = node(T,I)
+
+
 	f() = ()
 	
 	f(n::Int64,args...) = (n,f(args...)...)
 	
 	f(T::String,I::Int64,args...) = (node(T,I),f(args...)...)
+		
+
+		
 	
 	
 	
-	get_prop(p) = Graph.get_prop(g,p)
-	get_prop(p,ns...) = Graph.get_prop(g,ns...,p)
 	
 
 
@@ -226,11 +258,43 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function GF_Decimation(HoppMatr,NrLayers;LeftLead=nothing,RightLead=nothing;translate=nothing)
+function GF_Decimation(Hopping, VirtLeads=Dict(), LeadLayerSlicer=nothing;
+											 NrLayers,AtomsOfLayer,IndsAtomsOfLayer=nothing,
+											 graph_fname="",kwargs...)
 
+	HoppMatr(args...) = TBmodel.HoppingMatrix(AtomsOfLayer.(args)...;Hopping...)
+
+	return GF_Decimation(HoppMatr,NrLayers;VirtLeads...,translate=LeadLayerSlicer,plot_graph=(graph_fname,IndsAtomsOfLayer))
+	
+
+
+
+end
+
+
+function GF_Decimation(HoppMatr::Function,NrLayers::Int64;LeftLead=nothing,RightLead=nothing,translate=nothing,plot_graph=nothing)
+	
 	g = LayeredSystem.LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=LeftLead,RightLead=RightLead)
 
-	return  Energy -> GF_Decimation_fromGraph(Energy,g,translate=translate)
+
+	if !isnothing(plot_graph)
+
+		graph_fname,IndsAtomsOfLayer = plot_graph
+
+		nodelabel2(i) = (1<=i<=NrLayers ? (" ("*join(Utils.IdentifyRanges(IndsAtomsOfLayer(i))," ")*")") : "")
+
+		if !isempty(graph_fname)
+
+			nodelabel(i) = join(g[i,:name]," ")* (isnothing(IndsAtomsOfLayer) ? "" : nodelabel2(i))
+
+			Graph.Plot_Graph(Graph.SimpleDiGraph(g),fname=graph_fname,nodelabel=nodelabel,colorrule= i-> 1<=i<=NrLayers )
+
+		end
+	end
+
+
+
+	return  Energy -> GF_Decimation_fromGraph(Energy,g,translate)
 
 end
 
@@ -348,7 +412,7 @@ function GF_Decimation_fromGraph(Energy,g,translate=nothing)
 					function out2(name1::String,index1::Int64,
 											 	name2::String=name1,index2::Int64=index1;
 																										dir::String="both")
-						
+					
 						n1i1n2i2,slice = translate(name1,index1,name2,index2) 
 
 						return G(node(n1i1n2i2...)...,dir)[slice...]
@@ -371,10 +435,19 @@ end
 
 function LDOS(Gr;Op=[1],kwargs...)
 
-  return Operators.Trace_Orbitals(-1/pi*imag(LA.diag(Gr));Op=Op,kwargs...)
+	return Operators.Trace_Orbitals(-1/pi*imag(LA.diag(Gr));Op=Op,kwargs...)
 
 end
 
+function DOS(Gr;Op=[1],kwargs...)
+
+	d = -1/pi*imag(LA.diag(Gr))
+
+	length(Op)==1 && return sum(d)
+
+	return sum(Operators.Trace_Orbitals(d;Op=Op,kwargs...))
+
+end
 
 #===========================================================================#
 #
@@ -393,16 +466,17 @@ function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead
 
 		local I = findall(!isnothing,Ls)
 
-		["LeftLead","RightLead"][I],[size.(Ls[i],1) for i in I]
+		["LeftLead","RightLead"][I],[size.(Ls[i][:head],1) for i in I]
 
 	end
 
-	cumLSizes = Utils.recursive_cumsum(LSizes)
-
 	indsLayers = indsLayer.(1:NrLayers)
 
+	nr_at = mapreduce(length,+,indsLayers)
 
-	ldos = zeros(mapreduce(length,+,indsLayers) + cumLSizes[end][end])
+	cumLSizes = Utils.recursive_cumsum(LSizes,nr_at)
+
+	ldos = zeros(isempty(LSizes) ? nr_at : cumLSizes[end][end])
 
 
 	for (L,inds) in enumerate(indsLayers)
@@ -410,6 +484,7 @@ function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead
 		ldos[inds] = LDOS(GD("Layer",L),Op=Op,nr_at=length(inds))
 
 	end
+
 
 
 	for (LN,LS,cLS) in zip(LNames,LSizes,cumLSizes)
@@ -425,9 +500,41 @@ function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead
 	
 end
 
+function DOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead=nothing)
 
+	out = 0.0
 
+	for i in 1:NrLayers
+		out += DOS(GD("Layer",i),Op=Op,nr_at=length(indsLayer(i)))
+	end
 
+	for (LN,L) in (("LeftLead",LeftLead),("RightLead",RightLead))
+
+		if !isnothing(L)
+	
+			for (uc,atoms) in enumerate(L[:head])
+	
+				out += DOS(GD(LN,uc),Op=Op,nr_at=size(atoms,1))
+
+			end
+		end
+	end
+
+	return out
+
+end
+
+#===========================================================================#
+#
+# norm of the GF eigenvalues
+#
+#---------------------------------------------------------------------------#
+
+function GFmagnitude(g)#,Energies,filename=nothing)
+
+	LA.norm(LA.eigvals(g))
+
+end
 
 #===========================================================================#
 #

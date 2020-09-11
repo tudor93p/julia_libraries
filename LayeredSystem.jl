@@ -90,8 +90,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function DistribAtoms_toLayers(Atoms,isbond,LeadContacts)
-
+function Distribute_Atoms(Atoms,isbond,LeadContacts)
 			"""	
 	Atoms::Array{Float64,2} -> positions of atoms in the scattering region
 
@@ -131,13 +130,49 @@ function DistribAtoms_toLayers(Atoms,isbond,LeadContacts)
 	length(out) == size(Atoms,1) || error("There are unallocated atoms.")
 
 
-	return N,Utils.FindPartners(out,sortfirst=true)
+	LayerOfAtom, IndsAtomsOfLayer = Utils.FindPartners(out,sortfirst=true)
 
+
+
+
+	return Dict(
+
+			:NrLayers=> N,
+
+			:LayerOfAtom => LayerOfAtom,
+
+			:IndsAtomsOfLayer => IndsAtomsOfLayer,
+
+			:AtomsOfLayer => L->Atoms[IndsAtomsOfLayer(L),:],
+
+						)
 
 
 end
 
 
+function LayerSlicer(;LayerOfAtom,IndsAtomsOfLayer,Nr_Orbitals,kwargs...)
+	
+	return function (name::String,index::Int64)
+
+		name == "Layer" && return (name,index),(Colon(),)
+	
+		layer = LayerOfAtom(index)
+	
+		atoms = IndsAtomsOfLayer(layer)
+	
+		return ("Layer",layer),(if length(atoms)==1 Colon()
+#														elseif isnothing(Nr_Orbitals) nothing
+														else 
+	
+			TBmodel.Hamilt_indices(	vcat(1:Nr_Orbitals...),
+															findfirst(isequal(index),atoms),
+															Nr_Orbitals)
+														end,)
+
+	end
+		
+end
 #===========================================================================#
 #
 #	Sanity check for the atom <--> layer relationship:
@@ -146,17 +181,23 @@ end
 #---------------------------------------------------------------------------#
 
 
-function Check_AtomToLayer(N,LayerAtomRel,LeadContacts=[])
-													 
-	LayerOfAtom = LayerAtomRel[1]
+function Check_AtomToLayer(LeadContacts=[];kwargs...)
+	#NrLayers=nothing,LayerOfAtom=nothing,IndsAtomsOfLayer=nothing,AtomsOfLayer=nothing)
 	
+	for key in [:NrLayers,:LayerOfAtom,:IndsAtomsOfLayer,:AtomsOfLayer]
+		
+		haskey(kwargs,key) || return false
+
+	end
+
+	N,LayerOfAtom = kwargs[:NrLayers], kwargs[:LayerOfAtom]
+
 	for LC in LeadContacts
-	
-		if !(all(LayerOfAtom.(LC).==1) || all(LayerOfAtom.(LC).==N))
-	
-			return false
-	
-		end
+
+		contacts = LayerOfAtom.(LC)
+
+		!any(boundary -> all(contacts.==boundary),[1,N]) && return false
+
 	end
 
 	return true
@@ -166,7 +207,7 @@ end
 
 
 
-#===========================================================================#
+#==========================================================================#
 #
 #	Combine several (disjoint) leads into a single one 
 #
@@ -210,9 +251,7 @@ function Combine_Leads(leads,atoms,label)
 
 		:head => map(1:nr_ucs) do j vcat(f(:head,j)...) end,
 
-
 		:coupling => vcat(coupling.(leads)...),
-
 
 		:intracell => map(1:nr_ucs) do j Utils.BlkDiag(f(:intracell,j)) end,
 
@@ -249,52 +288,77 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Distribute_Leads(Leads, LeadContacts,
-																	Atoms, N, LayerAtomRelations)
+function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLayer, kwargs...)
+
+	isempty(Leads) && return Dict()
+
+	lead_distrib = Dict(("LeftLead",1)=>[],
+											("RightLead",NrLayers)=>[])
+
 	
-	isempty(Leads) && return Dict(),nothing,Dict()
+	for (iL,LC) in enumerate(LeadContacts)
 
-	LayerOfAtom, IndsAtomsOfLayer = LayerAtomRelations
-
-	AtomsOfLayer(l) = Atoms[IndsAtomsOfLayer(l),:]
-
-	LeadFamilies = Dict(
-											
-		map(enumerate(zip(Leads,LeadContacts))) do (iL,(L,LC))
-	
-			isempty(LC) && error("Lead does not couple to any atoms")
+		isempty(LC) && error("Lead does not couple to any atoms")
 		
-			layers = LayerOfAtom.(LC)
-	
-			all(layers .== 1) && return L[:label]=>(iL,"LeftLead",1)
-			
-			all(layers .== N) && return L[:label]=>(iL,"RightLead",N)
-		
-			error("Lead is not coupled to terminal layers.")
-		
-		end)
-	
+		layers = LayerOfAtom.(LC)
 
-	
-	VirtualLeads = Dict(map(["LeftLead","RightLead"]) do side 
+		for (side,n) in keys(lead_distrib)
 
-		leads = sort([k for (k,v) in LeadFamilies if v[2]==side],by=string)
-
-		return Symbol(side) => if isempty(leads) nothing else
-
-			Combine_Leads([Leads[LeadFamilies[l][1]] for l in leads],
-										AtomsOfLayer(LeadFamilies[leads[1]][3]),
-										side)
-
-				# Tuple(Lead,SubSizes)
-														end
-	end)
-
-	return Dict(k=>v[1] for (k,v) in VirtualLeads if !isnothing(v)),
-					Utils.FindPartners([(String(k),v[2]) for (k,v) in LeadFamilies],
-																													sortfirst=string),
-					Dict(k=>v[2] for (k,v) in VirtualLeads if !isnothing(v))
+			if all(layers .== n) 
 				
+				push!(lead_distrib[(side,n)],iL)
+			end
+		end	
+	end
+
+	if sum(length.(values(lead_distrib))) != length(Leads)
+
+		error("A lead is not coupled to terminal layers.")
+
+	end
+
+
+
+
+	VirtLeads,LeadSizes = Dict(), Dict()
+
+	for ((side,n),i) in filter!(p->!isempty(p.second),lead_distrib)
+
+		VirtLeads[Symbol(side)],LeadSizes[side] = Combine_Leads(Leads[i],
+																														AtomsOfLayer(n),
+																														side)
+	end
+
+	
+	SideOfLead, LeadsOfSide_ = Utils.FindPartners([string(Leads[i][:label])=>string(side) for ((side,n),I) in lead_distrib for i in I ], sortfirst=string)
+
+
+	LeadsOfSide(s) = LeadsOfSide_(string(s))
+
+
+	function slicer(name::String,index::Int64)
+
+		name in ["LeftLead","RightLead"] && return (name,index),(Colon(),)
+
+		side = SideOfLead(name)
+
+		allleads = LeadsOfSide(side)
+
+		length(allleads)==1 && return (side,index),(Colon(),)
+
+	 	lead = findfirst(isequal(name),allleads)
+	
+		boundaries = cumsum([0;LeadSizes[side][min(end,index)]])
+	
+		return (side,index),(boundaries[lead]+1:boundaries[lead+1],)
+
+	end
+
+	
+	return VirtLeads,Dict(	:SideOfLead => SideOfLead, 
+													:LeadsOfSide => LeadsOfSide,
+													:LeadSlicer => slicer
+											)
 end
 
 
@@ -309,77 +373,37 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function AtomLead_toLayerVirtLead(LayerAtomRel=nothing,
-																	NrOrbitals=nothing,
-																	VirtRealLeadRel=nothing,
-																	LeadSizes=nothing)
-									
+function LeadLayerSlicer(;LeadSlicer=nothing,kwargs...)
 
-	(isnothing(LayerAtomRel) | isnothing(NrOrbitals)) && return nothing
-																	
-	function translate(name::String,index::Int64,args...)
+	layer_slicer = LayerSlicer(;kwargs...)
+														 
 
-		ni1,slice1 = translate(name,index)
+	slicer(name::Symbol,index::Int64,args...) = slicer(string(name),index,args...)
+	slicer(name::Symbol,index::Int64) = slicer(string(name),index)
 	
-		ni2,slice2 = translate(args...)
-	
+		
+
+	function slicer(name::String,index::Int64,args...)
+
+		ni1,slice1 = slicer(name,index)
+
+		ni2,slice2 = slicer(args...)
+
+
 		return (ni1...,ni2...),(slice1...,slice2...)
 	
 	end
 
 
-	function translate(name::String,index::Int64)
+	function slicer(name::String,index::Int64)
 
-		if name in ["Layer","LeftLead","RightLead"]
+		name in ["Atom","Layer"] && return layer_slicer(name,index)
 	
-			return (name,index),(Colon(),)
-	
-		elseif name == "Atom"
-	
-			LayerOfAtom, IndsAtomsOfLayer = LayerAtomRel
-
-			layer = LayerOfAtom(index)
-	
-			atoms = IndsAtomsOfLayer(layer)
-	
-			slice = if length(atoms)==1 Colon() else
-			
-				TBmodel.Hamilt_indices(1:NrOrbitals,findfirst(index .== atoms),NrOrbitals)
-	
-							end
-	
-			return ("Layer",layer),(slice,)
-	
-		
-		elseif !isnothing(VirtRealLeadRel) & !isnothing(LeadSizes)
-	
-			SideOfLead, LeadsOfSide = VirtRealLeadRel
-
-			side = SideOfLead(name)
-			
-			allleads = LeadsOfSide(side)
-		
-			slice = if length(allleads)==1 Colon() else
-	
-		    lead = findfirst(name .== allleads)
-		
-				boundaries = cumsum([0;LeadSizes[side][min(end,index)]])
-	
-				boundaries[lead]+1:boundaries[lead+1]
-	
-							end
-	
-			return (side,index),(slice,)
-
-		else
-
-			error("Wrong input")
-
-		end
+		return LeadSlicer(name,index)
 
 	end
 
-	return translate
+	return slicer
 end
 
 
@@ -451,11 +475,11 @@ function LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=nothing,RightLead=noth
 
 	NrLeadUCs = if isempty(Leads) 0 else
 
-									maximum([length(L[:intracell]) for L in Leads])
+									maximum([length(L[:intracell]) for L in Leads])+1
 
 							end
 
-
+#	NrLeadUCs = 5
 
   g = Graph.MetaDiPath(NrLayers)
 
@@ -466,7 +490,7 @@ function LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=nothing,RightLead=noth
 
 	for i in 1:NrLayers
 
-		Graph.set_props!(g,i,Dict(#:type=>"Layer",
+		Graph.set_props!(g,i,Dict(:type=>"Layer",
 														 	:name=>("Layer",i),
 														 	:H=>HoppMatr(i))
 														)
@@ -480,7 +504,7 @@ function LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=nothing,RightLead=noth
 	for Lead in Leads,i in 1:NrLeadUCs
 
 			Graph.add_vertex!(g,Dict(vcat(
-#							:type=>"VirtualLead",
+							:type=>"VirtualLead",
 							:name=>(Lead[:label],i),
 							:H => Lead[:intracell][min(i,end)],
 							(i>1 ? [] : [:GFf => Lead[:GF],])... 
@@ -502,7 +526,7 @@ function LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=nothing,RightLead=noth
 
 				Graph.add_edge!(g,node(RightLead[:label],i),
 													node(RightLead[:label],i+1),
-													:H, RightLead[:intercell][i]
+													:H, RightLead[:intercell][min(i,end)]
 											)
 			end # intercell is given in the u direction, as here: i -> i+1 
 	end
@@ -517,7 +541,7 @@ function LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=nothing,RightLead=noth
 
 				Graph.add_edge!(g,node(LeftLead[:label],i+1),
 													node(LeftLead[:label],i),
-													:H, LeftLead[:intercell][i]'
+													:H, LeftLead[:intercell][min(i,end)]'
 											)
 		end # intercell is given in the u direction: opposite to i+1->i 
 	end
