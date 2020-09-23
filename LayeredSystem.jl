@@ -28,7 +28,8 @@ import TBmodel,Utils,Graph
 #---------------------------------------------------------------------------#
 
 
-function PrepareLead(pyLead,BridgeAtoms,HoppMatr,LeadGF)
+function PrepareLead(label, pyLead, BridgeAtoms, 
+										 HoppMatr=nothing, coupling=nothing, LeadGF=nothing, )
 """ 
 	- pyLead = python Lattice object; Lead aligned and attached to Atoms
 
@@ -41,41 +42,57 @@ function PrepareLead(pyLead,BridgeAtoms,HoppMatr,LeadGF)
 
 """
 
+
 	LeadAtoms = pyLead.PosAtoms()
 
-	LeadIntra = HoppMatr(LeadAtoms)
-
-	LeadInter = HoppMatr(LeadAtoms,LeadAtoms .+ pyLead.LattVect) 
+	lattice_out = Dict(:label => label, :head => [LeadAtoms] )
 
 
-	isnothing(BridgeAtoms) && return Dict(
-																				
-															:head => [LeadAtoms], 
-															
-															:intracell => [LeadIntra],
+	hamilt_out = isnothing(HoppMatr) & isnothing(LeadGF) |> function (latt) 
 
-															:intercell => [LeadInter],
+		latt && return Dict()
 
-															:GF => E->[LeadGF(E)]
+		return Dict(	
+					
+						:coupling => coupling,
 
-																				)
+						:intracell => [HoppMatr(LeadAtoms)]
+
+						:intercell => [HoppMatr(LeadAtoms,LeadAtoms .+ pyLead.LattVect)]
+
+						:GF => E->[LeadGF(E)]
+
+								)
+	end
+
+
+	isnothing(BridgeAtoms) && return merge(lattice_out, hamilt_out)
+
+
+
+
+	lattice_out = Dict(:label => label, :head => [BridgeAtoms,LeadAtoms] )
+	
+
+	isnothing(HoppMatr) && isnothing(LeadGF) && return lattice_out
+
 
 	BridgeIntra = HoppMatr(BridgeAtoms) 
 
 	BridgeToLead = HoppMatr(BridgeAtoms,LeadAtoms)
 
+	return merge(lattice_out, Dict(
 
-	return Dict(
+		:coupling => coupling,
 
-		:head => [BridgeAtoms,LeadAtoms],
+		:intracell => [BridgeIntra,hamilt_out[:intracell][1]],
 
-		:intracell => [BridgeIntra,LeadIntra],
-
-		:intercell => [BridgeToLead,LeadInter],
+		:intercell => [BridgeToLead,hamilt_out[:intercell][1]],
 
 		:GF => 	E-> (g->[RGF(E,BridgeIntra,(BridgeToLead',g)),g])(LeadGF(E))
 
-						)
+		))
+
 end
 
 
@@ -90,7 +107,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Distribute_Atoms(Atoms,isbond,LeadContacts)
+function Distribute_Atoms(Atoms, isbond, LeadContacts)
 			"""	
 	Atoms::Array{Float64,2} -> positions of atoms in the scattering region
 
@@ -151,6 +168,197 @@ function Distribute_Atoms(Atoms,isbond,LeadContacts)
 end
 
 
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function get_LeadContacts(Atoms; Leads=[], isBond=nothing,
+																				LeadContacts=nothing, kwargs...)
+	
+	!isnothing(LeadContacts) && LeadContacts
+
+	isempty(Leads) | isnothing(Atoms) && return []
+
+	return [findall(any.(eachcol(isBond(L[:head][1],Atoms)))) for L in Leads]
+
+end
+
+
+
+
+function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::AbstractDict;
+											 get_leadcontacts=false, kwargs...)
+
+	LeadContacts = get_LeadContacts(Atoms; kwargs...)
+
+	if LayeredSystem.Check_AtomToLayer(LeadContacts; LayerAtom...)
+	
+		!get_leadcontacts && return LayerAtom, LeadContacts
+
+		return LayerAtom
+
+	else 
+
+		return LayerAtomRels_(Atoms, "forced";
+									 					get_leadcontacts=get_leadcontacts,
+				 										LeadContacts=LeadContacts, kwargs...)
+	end
+
+end
+
+
+function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::String;
+											 get_leadcontacts=false, kwargs...)
+
+															#	all atoms belong to the same layer 
+	if LayerAtom=="trivial" 
+		
+		out = Dict( :NrLayers=> 1,
+								
+								:LayerOfAtom => i->1,
+								
+								:IndsAtomsOfLayer => l->1:size(Atoms,1),
+								
+								:AtomsOfLayer => L->Atoms ) 
+
+
+		get_leadcontacts && return out, get_LeadContacts(Atoms; kwargs...)
+
+		return out 
+
+	end
+
+
+	LayerAtom=="forced" || error("'LayerAtom' $LayerAtom not understood.")
+
+
+	LeadContacts = get_LeadContacts(Atoms; kwargs...)
+
+	out = Distribute_Atoms(Atoms, kwargs[:isBond], LeadContacts)
+
+	get_leadcontacts && return out, LeadContacts
+
+	return out 
+
+end
+
+
+function LayerAtomRels(pyLatt::T, LayerAtom_; 
+											 			get_leadcontacts=false, kwargs...) where T
+
+	Atoms = T <: AbstractMatrix ? pyLatt : pyLatt.PosAtoms()
+
+	out = (LayerAtom, LeadContacts) = LayerAtomRels_(
+																				Atoms, LayerAtom_; 
+																				get_leadcontacts=true, kwargs...)
+
+	PlotLayerAtoms_asGraph(Atoms, LayerAtom; 
+																	 kwargs..., LeadContacts=LeadContacts)
+
+	return get_leadcontacts ? out : LayerAtom
+
+end
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function PlotLayerAtoms_asGraph(Atoms, LayerAtom;
+																isBond, 
+																Leads=[], LeadContacts=nothing,
+																graph_fname="") 
+
+	isempty(graph_fname) | isnothing(Atoms) && return 
+
+	LeadContacts = get_LeadContacts(Atoms; Leads=Leads, isBond=isBond,
+																	LeadContacts=LeadsContacts)
+
+	colorrule(i) = 1<=i<=size(Atoms,1) ? LayerAtom[:LayerOfAtom](i) : 0
+
+	l_atoms = [vcat(L[:head]...) for L in Leads]
+
+	a_label(i) = string(i, i in vcat(LeadContacts...) ? "*" : "") 
+
+	l_labels = [repeat([L[:label]],s) for (L,s) in zip(Leads,size.(l_atoms,1))]
+
+	labels = map(string, vcat(a_label.(axes(Atoms,1)), l_labels...))
+
+	Graph.PlotAtoms_asGraph(vcat(Atoms,l_atoms...), isBond;
+														colorrule = colorrule, 
+														nodelabel = i->labels[i],
+														fname = graph_fname)
+end
+
+
+
+
+
+
+#===========================================================================#
+#
+#	Leads and Lattice together, possibly only lattice. 
+#
+#---------------------------------------------------------------------------#
+
+function NewGeometry(args...; Leads=[], kwargs...)
+
+	LayerAtom, LeadContacts = LayerAtomRels(args...;
+													get_leadcontacts=true, Leads=Leads, kwargs...)
+
+	VirtLeads, LeadRels = Distribute_Leads(Leads, LeadContacts; LayerAtom...)
+	
+
+#	return VirtLeads, LayerAtom, LeadRels
+
+#e#nd
+
+
+#functioni
+
+#	VL_LA_LR = (VirtLeads, LayerAtom, LeadRels) = NewGeometry()
+
+					# means that only the lattice part is desired (no Hamilt/GF)
+					
+	if isnothing(Nr_Orbitals) || (
+													!isempty(Leads) && !haskey(Leads[1],:intracell)
+																																			)
+		return LayerAtom, LeadRels, VirtLeads
+
+	end
+	
+	Slicer = LeadLayerSlicer(;LeadRels..., LayerAtom...,
+																				 				Nr_Orbitals=Nr_Orbitals)
+	
+	return LayerAtom, delete!(LeadRels,:LeadSlicer), VirtLeads, Slicer
+
+end
+
+
+
+
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+
 function LayerSlicer(;LayerOfAtom,IndsAtomsOfLayer,Nr_Orbitals,kwargs...)
 	
 	return function (name::String,index::Int64)
@@ -182,7 +390,6 @@ end
 
 
 function Check_AtomToLayer(LeadContacts=[];kwargs...)
-	#NrLayers=nothing,LayerOfAtom=nothing,IndsAtomsOfLayer=nothing,AtomsOfLayer=nothing)
 	
 	for key in [:NrLayers,:LayerOfAtom,:IndsAtomsOfLayer,:AtomsOfLayer]
 		
@@ -219,17 +426,21 @@ function Combine_Leads(leads,atoms,label)
 
 	coupling(l) = l[:coupling](l[:head][1],atoms)
 
+	hamilt = haskey(leads[1],:coupling) & haskey(leads[1],:intracell)
 
 	if length(leads)==1
 
-		return Dict(
-			:label =>	label,
-			
+		lattice_out = Dict( :label =>	label, :head => leads[1][:head])
+
+		!hamilt && return lattice_out,nothing
+
+		return merge(lattice_out, Dict(
+
 			:coupling => coupling(leads[1]),
 
-			(k=>leads[1][k] for k in [:head, :intracell,:intercell,:GF])...
+			(k=>leads[1][k] for k in [:intracell,:intercell,:GF])...
 			
-						), size.(leads[1][:intracell],1)
+			)), size.(leads[1][:intracell],1)
 
 	end
 
@@ -242,14 +453,19 @@ function Combine_Leads(leads,atoms,label)
 
 #	f(k,j,E) = [item(E) for item in f(k,j)]
 
-	nr_ucs = maximum(length.(f(:intracell)))
+	nr_ucs = maximum(length.(f(:head)))
 
 
-	NewLead = Dict(
+	lattice_out = Dict(
 
 		:label =>	label,
 
 		:head => map(1:nr_ucs) do j vcat(f(:head,j)...) end,
+		)
+
+	!hamilt && return lattice_out,nothing
+
+	NewLead = merge(lattice_out, Dict(
 
 		:coupling => vcat(coupling.(leads)...),
 
@@ -269,7 +485,7 @@ function Combine_Leads(leads,atoms,label)
 
 						end
 		
-					)
+						))
 
 	subsizes = map(1:nr_ucs) do j size.(f(:intracell,j),1) end
 
@@ -280,6 +496,8 @@ end
 
 
 
+#return VirtLeads,LayerAtom,LeadRels
+
 
 
 #===========================================================================#
@@ -288,12 +506,20 @@ end
 #
 #---------------------------------------------------------------------------#
 
+
 function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLayer, kwargs...)
 
-	isempty(Leads) && return Dict()
+	isempty(Leads) && return Dict(),Dict()
 
-	lead_distrib = Dict(("LeftLead",1)=>[],
-											("RightLead",NrLayers)=>[])
+
+	lead_distrib = Dict(("LeftLead",1)=>[])
+
+	if NrLayers!=1
+
+		lead_distrib[("RightLead",NrLayers)] = []
+
+	end
+
 
 	
 	for (iL,LC) in enumerate(LeadContacts)
@@ -320,13 +546,18 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 
 
 
-	VirtLeads,LeadSizes = Dict(), Dict()
+	VirtLeads, LeadSizes = Dict(), Dict()
 
 	for ((side,n),i) in filter!(p->!isempty(p.second),lead_distrib)
 
-		VirtLeads[Symbol(side)],LeadSizes[side] = Combine_Leads(Leads[i],
-																														AtomsOfLayer(n),
-																														side)
+		out = Combine_Leads(Leads[i],	AtomsOfLayer(n), side)
+
+		VirtLeads[Symbol(side)] = out[1]
+		
+		if !isnothing(out[2])
+			LeadSizes[side] = out[2]
+		end
+
 	end
 
 	
@@ -334,6 +565,14 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 
 
 	LeadsOfSide(s) = LeadsOfSide_(string(s))
+
+
+	length(VirtLeads) > length(LeadSizes) && return (
+																									 
+		VirtLeads, Dict(	:SideOfLead => SideOfLead, 
+											:LeadsOfSide => LeadsOfSide,
+											:LeadSlicer => nothing,
+										))
 
 
 	function slicer(name::String,index::Int64)
@@ -355,10 +594,10 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 	end
 
 	
-	return VirtLeads,Dict(	:SideOfLead => SideOfLead, 
+	return VirtLeads, Dict(	:SideOfLead => SideOfLead, 
 													:LeadsOfSide => LeadsOfSide,
 													:LeadSlicer => slicer
-											)
+												)
 end
 
 
@@ -376,7 +615,7 @@ end
 function LeadLayerSlicer(;LeadSlicer=nothing,kwargs...)
 
 	layer_slicer = LayerSlicer(;kwargs...)
-														 
+														
 
 	slicer(name::Symbol,index::Int64,args...) = slicer(string(name),index,args...)
 	slicer(name::Symbol,index::Int64) = slicer(string(name),index)
@@ -389,7 +628,6 @@ function LeadLayerSlicer(;LeadSlicer=nothing,kwargs...)
 
 		ni2,slice2 = slicer(args...)
 
-
 		return (ni1...,ni2...),(slice1...,slice2...)
 	
 	end
@@ -398,7 +636,7 @@ function LeadLayerSlicer(;LeadSlicer=nothing,kwargs...)
 	function slicer(name::String,index::Int64)
 
 		name in ["Atom","Layer"] && return layer_slicer(name,index)
-	
+
 		return LeadSlicer(name,index)
 
 	end

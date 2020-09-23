@@ -455,6 +455,18 @@ end
 #
 #---------------------------------------------------------------------------#
 
+
+function AllAtoms_Decimation(pyLatt;LeftLead=nothing,RightLead=nothing)
+
+	vcat(pyLatt.PosAtoms(),[vcat(L[:head]...) 
+												for L in [LeftLead,RightLead] if !isnothing(L)]...)
+
+end
+
+
+
+
+
 function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead=nothing)
 
 # corresponding to vcat(Atoms,LeftLead...,RightLead...)
