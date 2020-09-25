@@ -298,10 +298,12 @@ function Assemble_Bloch_Hamiltonian(intra,inter;argH::String="")
 
   iter = zip(Tms,[Rms,ms][findfirst(argH .== ["k","phi"])])
 
-  return function h(k)
 
+  return function h(k)
+	
     h1 = sum([T*exp(Algebra.dot(k,R)im) for (T,R) in iter])
-		# Bloch phase ℯ^(i 𝐤 ⋅ 𝐑 ), even if dimensions mismatch
+
+					# Bloch phase ℯ^(i 𝐤 ⋅ 𝐑 ), even if dimensions mismatch
    
     return intra + h1 + h1'
 
@@ -326,12 +328,12 @@ function get_argH(argH,ms,Rms)
 
   argH in args && return argH
 
-  argH != "" || error("** Error in Bloch_Hamiltonian: argH not understood. It should be an empty string or either of ",join((a->"'"+a+"'").(args),", ")," **")
+	isempty(argH) || error("** Error in Bloch_Hamiltonian: argH=$argH not understood. It should be an empty string or either of ",join((a->"'$a'").(args),", ")," **")
 
 	# it should be physical 'k' if the length of the lattice vectors,
 	#	 is equal to their number, and Bloch phase 'phi' otherwise
 
-  size(ms[1],1) == size(Rms[1],1) && return args[1]
+  length(ms[1]) == length(Rms[1]) && return args[1]
 
   return args[2]
 

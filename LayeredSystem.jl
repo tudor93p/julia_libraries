@@ -48,6 +48,7 @@ function PrepareLead(label, pyLead, BridgeAtoms,
 	lattice_out = Dict(:label => label, :head => [LeadAtoms] )
 
 
+
 	hamilt_out = isnothing(HoppMatr) & isnothing(LeadGF) |> function (latt) 
 
 		latt && return Dict()
@@ -56,9 +57,9 @@ function PrepareLead(label, pyLead, BridgeAtoms,
 					
 						:coupling => coupling,
 
-						:intracell => [HoppMatr(LeadAtoms)]
+						:intracell => [HoppMatr(LeadAtoms)],
 
-						:intercell => [HoppMatr(LeadAtoms,LeadAtoms .+ pyLead.LattVect)]
+						:intercell => [HoppMatr(LeadAtoms,LeadAtoms .+ pyLead.LattVect)],
 
 						:GF => E->[LeadGF(E)]
 
@@ -196,9 +197,10 @@ function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::AbstractDict;
 
 	if LayeredSystem.Check_AtomToLayer(LeadContacts; LayerAtom...)
 	
-		!get_leadcontacts && return LayerAtom, LeadContacts
+		!get_leadcontacts && return LayerAtom
 
-		return LayerAtom
+		return LayerAtom, LeadContacts
+
 
 	else 
 
@@ -215,19 +217,22 @@ function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::String;
 
 															#	all atoms belong to the same layer 
 	if LayerAtom=="trivial" 
-		
+	
+		s = size(Atoms,1)
+
 		out = Dict( :NrLayers=> 1,
 								
 								:LayerOfAtom => i->1,
 								
-								:IndsAtomsOfLayer => l->1:size(Atoms,1),
+								:IndsAtomsOfLayer => l->1:s,
 								
 								:AtomsOfLayer => L->Atoms ) 
 
 
-		get_leadcontacts && return out, get_LeadContacts(Atoms; kwargs...)
+		!get_leadcontacts && return out
 
-		return out 
+		return out, get_LeadContacts(Atoms; kwargs...)
+
 
 	end
 
@@ -239,9 +244,10 @@ function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::String;
 
 	out = Distribute_Atoms(Atoms, kwargs[:isBond], LeadContacts)
 
-	get_leadcontacts && return out, LeadContacts
+	!get_leadcontacts && return out
 
-	return out 
+	return out, LeadContacts
+
 
 end
 
@@ -275,7 +281,8 @@ end
 function PlotLayerAtoms_asGraph(Atoms, LayerAtom;
 																isBond, 
 																Leads=[], LeadContacts=nothing,
-																graph_fname="") 
+																graph_fname="",
+																kwargs...) 
 
 	isempty(graph_fname) | isnothing(Atoms) && return 
 
@@ -309,25 +316,14 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function NewGeometry(args...; Leads=[], kwargs...)
+function NewGeometry(args...; Leads=[], Nr_Orbitals=nothing, kwargs...)
 
 	LayerAtom, LeadContacts = LayerAtomRels(args...;
 													get_leadcontacts=true, Leads=Leads, kwargs...)
 
+
 	VirtLeads, LeadRels = Distribute_Leads(Leads, LeadContacts; LayerAtom...)
 	
-
-#	return VirtLeads, LayerAtom, LeadRels
-
-#e#nd
-
-
-#functioni
-
-#	VL_LA_LR = (VirtLeads, LayerAtom, LeadRels) = NewGeometry()
-
-					# means that only the lattice part is desired (no Hamilt/GF)
-					
 	if isnothing(Nr_Orbitals) || (
 													!isempty(Leads) && !haskey(Leads[1],:intracell)
 																																			)
