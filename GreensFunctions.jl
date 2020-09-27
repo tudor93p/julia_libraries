@@ -512,7 +512,7 @@ function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead
 	
 end
 
-function DOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead=nothing)
+function DOS_Decimation(GD, NrLayers, indsLayer; Op=[1], LeftLead=nothing, RightLead=nothing)
 
 	out = 0.0
 
