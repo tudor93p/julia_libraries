@@ -565,19 +565,6 @@ end
 
 
 
-#===========================================================================#
-#
-#	Velocity operator dH/dk 
-#
-#---------------------------------------------------------------------------#
-
-function Velocity_Operator(H,dir=1;dk=pi/100)
-
-  v(k) = (H(k .+ dk*(axes(k,1).==dir)) - H(k))/dk
-
-  return (P;k,kwargs...) -> reshape(LA.diag(P'*v(k)*P),:,1)
-
-end
 
 
 

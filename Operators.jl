@@ -19,6 +19,28 @@ import Utils,TBmodel
 
 
 
+function Velocity(BlochH, dir=1; dk=pi/100)
+
+	isnothing(dir) | isnothing(BlochH) && return (P;k) -> zeros(size(P,2),1)
+
+	function v(k) 
+		
+		k1, k2 = copy(k), copy(k)
+
+		k1[dir] -= dk/2
+
+		k2[dir] += dk/2
+
+		return (BlochH(k2) - BlochH(k1))/dk
+
+	end
+
+#	(BlochH(k .+ dk*(axes(k,1).==dir)) - BlochH(k))/dk
+
+  return (P;k,kwargs...) -> reshape(LA.diag(P'*v(k)*P),:,1)
+
+end
+
 
 	# ----- probability of localization on individual atoms ----- #
 
