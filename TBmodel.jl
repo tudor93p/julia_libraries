@@ -86,7 +86,8 @@ function Hamilt_indices(orbital,atom,nr_orbitals)
 
 end
 
-function Hamilt_indices_all(orbs,atoms,d0;iter="atoms",flat=false)
+function Hamilt_indices_all(orbs,atoms,d0=length(orbs);
+														iter="atoms",flat=false)
 
   iter=="orbitals" && flat==true && println("\nWarning! The function returns flat  Hamiltonian indices by iterating over orbitals. In multi-orbital system, the order will *not* be consistent with the way the Hamiltonian is built and unexpected results will occur.\n")
 

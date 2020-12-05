@@ -18,7 +18,7 @@ module LayeredSystem
 
 
 import TBmodel,Utils,Graph
-
+import GreensFunctions
 
 #===========================================================================#
 #
@@ -90,7 +90,7 @@ function PrepareLead(label, pyLead, BridgeAtoms,
 
 		:intercell => [BridgeToLead,hamilt_out[:intercell][1]],
 
-		:GF => 	E-> (g->[RGF(E,BridgeIntra,(BridgeToLead',g)),g])(LeadGF(E))
+		:GF => 	E-> (g->[GreensFunctions.GF(E,BridgeIntra,(BridgeToLead',g)),g])(LeadGF(E))
 
 		))
 
@@ -120,35 +120,40 @@ function Distribute_Atoms(Atoms, isbond, LeadContacts)
 			"""
 
 
-	out = Dict{Int64,Int64}()
 
 			# -------- find layers iteratively ----------- # 
 
-	function f(layer,candidates)
 
-		isempty(candidates) && return layer-1
+	function f(layer, candidates, out=Dict{Int64,Int64}())
 
-		get!.([out],candidates,layer)
+		if isempty(candidates) || size(Atoms,1)==out.count
+		
+			Set(keys(out))==Set(axes(Atoms,1)) && return layer-1,out
 
-		return f(layer+1, filter(setdiff(axes(Atoms,1),keys(out))) do i
+			error("There are unallocated atoms.")
 
-							 					ai = Atoms[i,:]
+		end
 
-									  		return any(c->isbond(Atoms[c,:],ai),candidates)
+		merge!(out, Dict(c=>layer for c in candidates))
 
-											end)
+		candidates = filter(setdiff(axes(Atoms,1), keys(out))) do i
+
+										any(j -> isbond(Atoms[j,:], Atoms[i,:]), candidates)
+											
+								end
+
+		return f(layer+1, candidates, out)
+
 	end
 
 
-	N = f(1,vcat(LeadContacts...) |> lc -> isempty(lc) ? [1] : lc)
+	N,D = f(1,vcat(LeadContacts...) |> lc -> isempty(lc) ? [1] : lc)
 
 
 	# -------- sanity check and return -------------------- #
 
-	length(out) == size(Atoms,1) || error("There are unallocated atoms.")
 
-
-	LayerOfAtom, IndsAtomsOfLayer = Utils.FindPartners(out,sortfirst=true)
+	LayerOfAtom, IndsAtomsOfLayer = Utils.FindPartners(D, sortfirst=true)
 
 
 

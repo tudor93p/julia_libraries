@@ -30,9 +30,13 @@ function get_eigen(H,evect=false;tol=1e-8,nr_bands=nothing,sigma=tol/10)
  
   end
 
+
   sigma = isnothing(sigma) ? tol/10 : sigma
 
-  Areigs(k) = Arpack.eigs(H(k),nev=nr_bands,sigma=sigma,tol=tol,ritzvec=evect)
+  Areigs(k) = Arpack.eigs(H(k), nev=nr_bands, 
+																sigma=sigma, 
+																tol=tol,
+																ritzvec=evect)
 
 
 	evect && return (k) -> Areigs(k) |> function (e)
@@ -62,7 +66,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function get_nrbands(nr_bands,H0,lim=0.1)
+function get_nrbands(nr_bands, H0, lim=0.2)
 
   nH = size(H0,1)
 
@@ -78,28 +82,55 @@ function Diagonalize(H, kPoints, filename=nothing;
 										 kLabels=nothing,
 										 kTicks=[0],
 										 filemethod="new", parallel=false, operators=[[],[]],
-										 tol=1e-8,  nr_bands=nothing, sigma=tol/10)
+										 tol=1e-8,  nr_bands=nothing, sigma=tol/10, kwargs...)
 
-  k0 = kPoints[1,:]
+  k1 = kPoints[1,:]
+
+	nr_bands_calc = get_nrbands(nr_bands,H(k1))
 
   eig = get_eigen(H, !isempty(operators[1]); 
-									tol=tol, nr_bands=get_nrbands(nr_bands,H(k0)), sigma=sigma)
-
-  #k_label, k, [En, Op1, Op2, ...]
-
-	psi0 = eig(k0)[2] # [1] is the eigenvalue; wfs are on columns
+									tol=tol, nr_bands=nr_bands_calc, sigma=sigma)
 
 
-  bounds = cumsum([[0,1];[size(Op(psi0[:,1:1],k=k0),2) 
-																							for Op in operators[2]]])
+	function restrict((e,p))
+
+						# if no restriction desired 
+						# if the restriction was implemented already 
+
+		isnothing(nr_bands) | !isnothing(nr_bands_calc)	&& return (e,p)
+
+						# if only the eigenvalues are calculated
+						# if the   
+
+		isnothing(p) | (nr_bands >= length(e)) && return (e, p)
+
+		m,M = argmin(abs.(e .- sigma)) .+ [-1,1]*div(nr_bands,2)
+
+		inds = max(m-1,0) + min(length(e)-M,0) .+ (1:nr_bands)
+	
+		return (e[inds], p[:,inds] )
+
+	end
+
+	out(k) = eig(k) |> restrict |> function	((e,p),)
+
+															(e, [Op(p,k=k) for Op in operators[2]])
+
+																end
+
+
+	E1, Op1 = out(k1)
+															
+	bounds = cumsum([0;1;size.(Op1,2)])
 
 
   result = vcat(
-    (parallel ? pmap : map)(eachrow(kPoints)) do k
 
-      E,P = eig(k)
+		hcat(E1, Op1...),
 
-      return hcat(E,[Op(P,k=k) for Op in operators[2]]...)
+		(parallel ? pmap : map)(eachrow(kPoints[2:end,:])) do k
+
+			out(k) |> out_k -> hcat(out_k[1], out_k[2]...)
 
     end...)
 

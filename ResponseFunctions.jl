@@ -113,6 +113,39 @@ end
 
 
 
+#	A = G*W*G'
+
+#	GammaS = GreensFunctions.DecayWidth(source)
+	
+#	GammaD = GreensFunctions.DecayWidth(drain)
+
+#	return f(GammaS*G1*GammaD*G2')
+
+
+#h = H ( (layer2,atom2)-> (layer1,atom1))
+
+
+
+
+
+function BondTransmission(G, SE_lead, Bonds, Hoppings; f=LA.tr, kwargs...)
+
+	W = GreensFunctions.DecayWidth(SE_lead)
+
+	Gd = Dict(a=>G(a) for a in unique(vcat(vcat.(Bonds...)...)))
+
+	return [-2imag(f(Gd[i]*W*Gd[j]'*h)) for ((i,j),h) in zip(Bonds,Hoppings)]
+	
+#		T[i,j] = -2imag(f(G(i)*W*G(j)'*h))
+
+#		T[i,j] = f((G(i)*W*G(j)').*(H(j,i))) # ? Probably not element-wise
+
+
+																					
+end
+
+
+
 
 
 #===========================================================================#

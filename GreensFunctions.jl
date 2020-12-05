@@ -259,7 +259,7 @@ end
 #---------------------------------------------------------------------------#
 
 function GF_Decimation(Hopping, VirtLeads=Dict(), LeadLayerSlicer=nothing;
-											 NrLayers,AtomsOfLayer,IndsAtomsOfLayer=nothing,
+											 NrLayers, AtomsOfLayer, IndsAtomsOfLayer=nothing,
 											 graph_fname="",kwargs...)
 
 	HoppMatr(args...) = TBmodel.HoppingMatrix(AtomsOfLayer.(args)...;Hopping...)
@@ -273,7 +273,7 @@ end
 
 
 function GF_Decimation(HoppMatr::Function,NrLayers::Int64;LeftLead=nothing,RightLead=nothing,translate=nothing,plot_graph=nothing)
-	
+
 	g = LayeredSystem.LayeredSystem_toGraph(HoppMatr,NrLayers;LeftLead=LeftLead,RightLead=RightLead)
 
 
@@ -281,9 +281,9 @@ function GF_Decimation(HoppMatr::Function,NrLayers::Int64;LeftLead=nothing,Right
 
 		graph_fname,IndsAtomsOfLayer = plot_graph
 
-		nodelabel2(i) = (1<=i<=NrLayers ? (" ("*join(Utils.IdentifyRanges(IndsAtomsOfLayer(i))," ")*")") : "")
-
 		if !isempty(graph_fname)
+		
+			nodelabel2(i) = (1<=i<=NrLayers ? (" ("*join(Utils.IdentifyRanges(IndsAtomsOfLayer(i))," ")*")") : "")
 
 			nodelabel(i) = join(g[i,:name]," ")* (isnothing(IndsAtomsOfLayer) ? "" : nodelabel2(i))
 
@@ -419,7 +419,6 @@ function GF_Decimation_fromGraph(Energy,g,translate=nothing)
 
 					end
 
-
 				end
 
 end
@@ -433,19 +432,16 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function LDOS(Gr;Op=[1],kwargs...)
+function LDOS(Gr; kwargs...)
 
-	return Operators.Trace_Orbitals(-1/pi*imag(LA.diag(Gr));Op=Op,kwargs...)
+	DOS(Gr; sum_up=false, kwargs...)
 
 end
 
-function DOS(Gr;Op=[1],kwargs...)
+function DOS(Gr; Op=[1], kwargs...)
 
-	d = -1/pi*imag(LA.diag(Gr))
+	Operators.Trace("orbitals", Op; sum_up=true, kwargs...)(-1/pi*imag(LA.diag(Gr)))
 
-	length(Op)==1 && return sum(d)
-
-	return sum(Operators.Trace_Orbitals(d;Op=Op,kwargs...))
 
 end
 
@@ -456,9 +452,11 @@ end
 #---------------------------------------------------------------------------#
 
 
-function AllAtoms_Decimation(pyLatt;LeftLead=nothing,RightLead=nothing)
+function AllAtoms_Decimation(Latt; LeftLead=nothing,RightLead=nothing)
 
-	vcat(pyLatt.PosAtoms(),[vcat(L[:head]...) 
+	Atoms = (Latt isa AbstractMatrix) ? Latt : Latt.PosAtoms()
+
+	vcat(Atoms,[vcat(L[:head]...) 
 												for L in [LeftLead,RightLead] if !isnothing(L)]...)
 
 end
@@ -467,7 +465,8 @@ end
 
 
 
-function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead=nothing)
+function LDOS_Decimation(GD, NrLayers, indsLayer; 
+												 				Op=[1], LeftLead=nothing, RightLead=nothing)
 
 # corresponding to vcat(Atoms,LeftLead...,RightLead...)
 
@@ -493,7 +492,7 @@ function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead
 
 	for (L,inds) in enumerate(indsLayers)
 
-		ldos[inds] = LDOS(GD("Layer",L),Op=Op,nr_at=length(inds))
+		ldos[inds] = LDOS(GD("Layer",L); Op=Op, nr_at=length(inds))
 
 	end
 
@@ -511,6 +510,10 @@ function LDOS_Decimation(GD,NrLayers,indsLayer;Op=[1],LeftLead=nothing,RightLead
 	return ldos
 	
 end
+
+
+
+
 
 function DOS_Decimation(GD, NrLayers, indsLayer; Op=[1], LeftLead=nothing, RightLead=nothing)
 

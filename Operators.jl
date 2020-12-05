@@ -8,7 +8,6 @@ import SparseArrays; const SpA = SparseArrays
 import Utils,TBmodel
 
 
-# println("Loaded 'Operator' module")
 
 
 #===========================================================================#
@@ -114,7 +113,6 @@ end
 
 
 function Operator(Op::AbstractArray;purpose="expectation",kwargs...)
-
 
 
   Op,(nr_at,nr_orb,size_H),diag = Understand_OperatorInput(Op;kwargs...)
@@ -468,18 +466,16 @@ end
 
 
 
-function Understand_OperatorInput(A::AbstractArray;diag=nothing,kwargs...) 
+function Understand_OperatorInput(A::AbstractVecOrMat; 
+																	diag=nothing, kwargs...) 
  
-  
-  ndims(A) in [1,2] || error("Wrong kind of array.")
-
   if ndims(A)==2 
 
-    if  size(A,1) != size(A,2)
+    if size(A,1) != size(A,2)
 
       A = reshape(A,:)
 
-    elseif maximum(abs.(A.-LA.diagm(0=>LA.diag(A)))) < 1e-5
+		elseif isapprox(A, LA.diagm(0=>LA.diag(A)), atol=1e-6)
 
       A = LA.diag(A)
 
@@ -490,13 +486,13 @@ function Understand_OperatorInput(A::AbstractArray;diag=nothing,kwargs...)
 
   dim = size(A,1)
 
-  numbers = get_nratorbH(;kwargs...)
-
+  numbers, enough_data = get_nratorbH(;kwargs...)
 
 
 
   conditions = [prod(size(A))==1;
-      		(n->!isnothing(n) && n==dim).(numbers)]
+      		(n->!isnothing(n) && n==dim).(numbers)...]
+
 
   if any(conditions)
 
@@ -530,26 +526,44 @@ function Understand_OperatorInput(A::AbstractArray;diag=nothing,kwargs...)
 
 end
 
+
+function get_nratorbH(nr_at::Integer, nr_orb::Integer, size_H::Integer)
+
+	nr_at*nr_orb==size_H && return (nr_at, nr_orb, size_H), true
+
+	error("Wrong number of atoms/orbitals")
+
+end
+
+
+function get_nratorbH(nr_at::Nothing, nr_orb::Integer, size_H::Integer)
+
+	get_nratorbH(div(size_H,nr_orb), nr_orb, size_H)
+
+end
+
+function get_nratorbH(nr_at::Integer, nr_orb::Nothing, size_H::Integer)
+
+	get_nratorbH(nr_at, div(size_H,nr_at), size_H)
+
+end
+
+function get_nratorbH(nr_at::Integer, nr_orb::Integer, size_H::Nothing)
+
+	get_nratorbH(nr_at, nr_orb, nr_at*nr_orb)
+
+end
+
+
 function get_nratorbH(;nr_at=nothing,nr_orb=nothing,size_H=nothing,kwargs...)
 
+	(nr_at,nr_orb,size_H) |> function (args)
+		
+		count(!isnothing, args)<2 && return args, false
 
-  nr_vars = count((!isnothing).([nr_at,nr_orb,size_H]))
+		return get_nratorbH(args...)
 
-  if nr_vars == 1 & isnothing(nr_orb)
-
-    nr_orb = 1
-    nr_vars = 2
-
-  end
-
-
-  nr_vars < 2 && return [nr_at,nr_orb,size_H]
-
-  nr_vars==3 && nr_at*nr_orb!=size_H && error("Wrong number of atoms/orbitals")
-
-  all((!isnothing).([nr_at,nr_orb])) && return [nr_at,nr_orb,nr_at*nr_orb]
-  all((!isnothing).([nr_at,size_H])) && return [nr_at,div(size_H,nr_at),size_H]
-  all((!isnothing).([nr_orb,size_H])) && return [div(size_H,nr_orb),nr_orb,size_H]
+	end
 
 end
 
@@ -576,52 +590,96 @@ end
 # 
 #---------------------------------------------------------------------------#
 
+get_diag(A::AbstractMatrix) = LA.diag(A)
+get_diag(A::AbstractVector) = A
 
-function Trace_Orbitals(M::AbstractVector;Op=[1],kwargs...)
 
-  nr_at,nr_orb, = get_nratorbH(;size_H=size(M,1),kwargs...)
+function Trace(what, Op=[1]; sum_up=false, kwargs...)
 
-  i(a) = TBmodel.Hamilt_indices(1:nr_orb,a,nr_orb)
+#	@warn "Using Trace in Operators with:" Op kwargs
 
-  which_len = (length(Op) .== [nr_at,1,nr_orb,nr_at*nr_orb])
+	oa = ["orbitals","atoms"]
 
-  any(which_len) || error("Wrong operator length")
+	what in oa || error("The first argument must be either of "*string(oa))
 
-  oper = [a->Op[a],a->Op,a->Op,a->Op[i(a)]][findfirst(which_len)]
 
-  return [sum(M[i(a)].*oper(a)) for a in 1:nr_at]
+	S = size(Op,1)
+
+	if sum_up && (S==1 || all(isapprox.(Op[1], Op[2:end], atol=1e-8))) 
+		
+		return A -> Op[1]*((typeof(A)<:AbstractMatrix) ? LA.tr : sum)(A)
+
+	end
+
+
+	(nr_at, nr_orb, size_H), enough_data = get_nratorbH(; kwargs...)
+
+
+	!enough_data && return function (A)
+
+								Trace(what, Op; sum_up=sum_up, size_H=size(A,1), kwargs...)(A)
+
+									end
+
+	Op = get_diag(Op)
+
+
+	function check(A) 
+		
+		@assert size(A,1)==size_H 
+
+		return A
+
+	end
+
+
+#	nr_at==1 && what=="atoms"
+
+
+
+
+
+	S==size_H && sum_up && return A -> sum(Op.*get_diag(check(A)))
+
+
+	what2 = oa[findfirst(!isequal(what), oa)]
+
+
+	inds = TBmodel.Hamilt_indices_all(1:nr_orb,1:nr_at; iter=what2)
+
+
+	iter(M) = get_diag(M) |> m -> (m[i] for i in inds)
+
+
+	S==1 && !sum_up && return A -> Op[1]* sum.(iter(check(A)))
+
+
+	S==size_H && return A -> [sum(oi.*ai) for (oi,ai) in zip(iter(Op),iter(check(A)))]
+
+
+
+
+
+	sum_up_ = sum_up ? sum : identity
+
+
+	nr = Dict("orbitals"=>nr_orb, "atoms"=>nr_at)
+
+
+
+	S==nr[what] && return A -> sum_up_([sum(Op.*ai) for ai in iter(check(A))])
+
+	S==nr[what2] && return A -> sum_up_(Op.*sum.(iter(check(A))))
+
+
+	error("Something went wrong")
+
+
 
 end
 
-function Trace_Orbitals(M::AbstractMatrix;Op=[1],kwargs...)
-
-	return Trace_Orbitals(LA.diag(M);Op=Op,kwargs...)
-
-end
-
-function Trace_Atoms(M::AbstractVector;Op=[1],kwargs...)
-
-  nr_at,nr_orb, = get_nratorbH(;size_H=size(M,1),kwargs...)
-
-  i(o) = TBmodel.Hamilt_indices(o,1:nr_at,nr_orb)
-
-  which_len = (length(Op) .== [nr_at,1,nr_orb,nr_at*nr_orb])
-
-  any(which_len) || error("Wrong operator length")
-
-  oper = [o->Op,o->Op,o->Op[o],o->Op[i(o)]][findfirst(which_len)]
-
-  return [sum(M[i(o)].*oper(o)) for o in 1:nr_orb]
 
 
-end
-
-
-function Trace_Atoms(M::AbstractMatrix;Op=[1],kwargs...)
-
-	return Trace_Atoms(LA.diag(M);Op=Op,kwargs...)
-
-end
 
 
 
