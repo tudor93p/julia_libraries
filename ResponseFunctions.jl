@@ -128,23 +128,70 @@ end
 
 
 
-function BondTransmission(G, SE_lead, Bonds, Hoppings; f=LA.tr, kwargs...)
+function BondTransmission(G, SE_lead, Bonds, RBonds, Hoppings; f=LA.tr, kwargs...)
 
 	W = GreensFunctions.DecayWidth(SE_lead)
 
-	Gd = Dict(a=>G(a) for a in unique(vcat(vcat.(Bonds...)...)))
+	atoms = sort(unique(vcat(vcat.(Bonds...)...)))
 
-	return [-2imag(f(Gd[i]*W*Gd[j]'*h)) for ((i,j),h) in zip(Bonds,Hoppings)]
+#	Gd = Dict(a=>G(a) for a in atoms)
+
+
+	bondT = zeros(length(Bonds))
+
+
+	for sector in Utils.IdentifySectors(first.(sort(Bonds)))
+
+		Gi = G( Bonds[sector[1]][1] )
+
+		for bond_index in sector 
+
+			Gj = G( Bonds[bond_index][2] )
+
+			bondT[bond_index] = -2imag(f(	
+															  Gi*W*Gj'*Hoppings[bond_index]
+															 -Gj*W*Gi'*Hoppings[bond_index]'
+															 ))
+
+#			bondT[bond_index] = Tij_minus_Tji
+
+		end
+
+	end 
+
+	return bondT
+
+#	return [-2imag(f(Gd[i]*W*Gd[j]'*h)) for ((i,j),h) in zip(Bonds,Hoppings)]
 	
 #		T[i,j] = -2imag(f(G(i)*W*G(j)'*h))
 
 #		T[i,j] = f((G(i)*W*G(j)').*(H(j,i))) # ? Probably not element-wise
 
 
+
+#	nr_at = 
+
 																					
 end
 
 
+function SiteTransmission(BondT, Bonds, RBonds)
+
+	nr_at = length(unique(vcat(vcat.(Bonds...)...)))
+
+	siteT = zeros(nr_at * length(RBonds[1][1]) )
+
+	for ((i,j),(Ri,Rj),Tij) in zip(Bonds, RBonds, BondT)
+
+		siteT[ i .+ [0,nr_at] ] +=  Tij * (Rj-Ri)
+
+		siteT[ j .+ [0,nr_at] ] += -Tij * (Ri-Rj)
+		
+	end
+
+	return siteT 
+
+end
 
 
 
