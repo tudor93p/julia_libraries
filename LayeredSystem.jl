@@ -6,7 +6,7 @@ module LayeredSystem
 #					Lima, Dusko, Lewenkopf - 	PRB 97, 165405 (2018)
 #
 #			"Efficient method for computing the electronic transport properties 
-#								of a multiterminal system "
+#								of a multiterminal system"
 #
 #		The two-terminal counterpart is presented in
 #
@@ -18,7 +18,8 @@ module LayeredSystem
 
 
 import TBmodel,Utils,Graph
-import GreensFunctions
+import LinearAlgebra; const LA = LinearAlgebra
+#import GreensFunctions
 
 #===========================================================================#
 #
@@ -82,6 +83,11 @@ function PrepareLead(label, pyLead, BridgeAtoms,
 
 	BridgeToLead = HoppMatr(BridgeAtoms,LeadAtoms)
 
+
+
+
+
+
 	return merge(lattice_out, Dict(
 
 		:coupling => coupling,
@@ -90,12 +96,85 @@ function PrepareLead(label, pyLead, BridgeAtoms,
 
 		:intercell => [BridgeToLead,hamilt_out[:intercell][1]],
 
-		:GF => 	E-> (g->[GreensFunctions.GF(E,BridgeIntra,(BridgeToLead',g)),g])(LeadGF(E))
+#		:GF => 	E-> (g->[GreensFunctions.GF(E,BridgeIntra,(BridgeToLead',g)),g])(LeadGF(E))
+	
+		:GF => function (E)
+	
+				g = LeadGF(E)
+
+				g1 = inv(Array(E*LA.I - BridgeIntra - BridgeToLead*g*BridgeToLead'))
+
+				return [g1,g]
+
+		end
 
 		))
 
 end
 
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+function LeadAtomOrder(nr_at=0; 
+											 LeftLead=nothing, RightLead=nothing, kwargs...)
+
+	LNames,LSizes = begin
+
+		local Ls = [LeftLead,RightLead]
+
+		local I = findall(!isnothing,Ls)
+
+		["LeftLead","RightLead"][I],[size.(Ls[i][:head],1) for i in I]
+
+	end
+
+
+	out = Dict()
+	
+	cumLSizes = Utils.recursive_cumsum(LSizes, nr_at)
+
+
+	for (LN,LS,cLS) in zip(LNames, LSizes, cumLSizes)
+																			 
+		for (uc,(n,cls)) in enumerate(zip(LS, cLS))
+
+			out[(LN,uc)] = cls-n+1:cls
+
+		end
+		
+	end
+
+
+#		LN in LNames 
+#
+#		i = findfirst(isequal(LN),LNames)
+#
+#		isnothing(i) && error("'$LN' not found")
+#
+#		out[(LN,LSizes[i])]
+
+
+
+	return out
+
+
+end
+
+
+function AllAtoms(Latt; LeftLead=nothing,RightLead=nothing)
+
+	Atoms = (Latt isa AbstractMatrix) ? Latt : Latt.PosAtoms()
+
+	vcat(Atoms,[vcat(L[:head]...) 
+												for L in [LeftLead,RightLead] if !isnothing(L)]...)
+
+end
 
 
 
@@ -225,25 +304,26 @@ function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::String;
 	
 		s = size(Atoms,1)
 
+		
+
+
 		out = Dict( :NrLayers=> 1,
 								
-								:LayerOfAtom => i->1,
+								:LayerOfAtom => i -> (1<=i<=s ? 1 : nothing),
 								
-								:IndsAtomsOfLayer => l->1:s,
+								:IndsAtomsOfLayer => l->(l==1 ? range(1,s,step=1) : nothing),
 								
-								:AtomsOfLayer => L->Atoms ) 
+								:AtomsOfLayer => L->Atoms )
 
 
 		!get_leadcontacts && return out
 
 		return out, get_LeadContacts(Atoms; kwargs...)
 
-
 	end
 
 
 	LayerAtom=="forced" || error("'LayerAtom' $LayerAtom not understood.")
-
 
 	LeadContacts = get_LeadContacts(Atoms; kwargs...)
 
@@ -257,10 +337,10 @@ function LayerAtomRels_(Atoms::AbstractMatrix, LayerAtom::String;
 end
 
 
-function LayerAtomRels(pyLatt::T, LayerAtom_; 
-											 			get_leadcontacts=false, kwargs...) where T
 
-	Atoms = T <: AbstractMatrix ? pyLatt : pyLatt.PosAtoms()
+function LayerAtomRels(arg1, LayerAtom_; get_leadcontacts=false, kwargs...)
+
+	Atoms = arg1 isa AbstractMatrix ? arg1 : arg1.PosAtoms()
 
 	out = (LayerAtom, LeadContacts) = LayerAtomRels_(
 																				Atoms, LayerAtom_; 
@@ -326,8 +406,11 @@ function NewGeometry(args...; Leads=[], Nr_Orbitals=nothing, kwargs...)
 	LayerAtom, LeadContacts = LayerAtomRels(args...;
 													get_leadcontacts=true, Leads=Leads, kwargs...)
 
+#	LayerAtom[:NrLayers]
 
-	VirtLeads, LeadRels = Distribute_Leads(Leads, LeadContacts; LayerAtom...)
+
+
+	VirtLeads, LeadRels = Distribute_Leads(Leads, LeadContacts; Nr_Orbitals=Nr_Orbitals, LayerAtom...)
 	
 	if isnothing(Nr_Orbitals) || (
 													!isempty(Leads) && !haskey(Leads[1],:intracell)
@@ -336,7 +419,7 @@ function NewGeometry(args...; Leads=[], Nr_Orbitals=nothing, kwargs...)
 
 	end
 	
-	Slicer = LeadLayerSlicer(;LeadRels..., LayerAtom...,
+	Slicer = LeadLayerSlicer(;LeadRels..., LayerAtom..., VirtLeads...,
 																				 				Nr_Orbitals=Nr_Orbitals)
 	
 	return LayerAtom, delete!(LeadRels,:LeadSlicer), VirtLeads, Slicer
@@ -360,28 +443,34 @@ end
 
 
 
-function LayerSlicer(;LayerOfAtom,IndsAtomsOfLayer,Nr_Orbitals,kwargs...)
-	
-	return function (name::String,index::Int64)
+function LayerSlicer(;LayerOfAtom, IndsAtomsOfLayer, Nr_Orbitals, kwargs...)
+
+	function (name::String,index::Int64)
 
 		name == "Layer" && return (name,index),(Colon(),)
-	
+
+		name == "Atom" || return nothing #error("Type '$name' not understood")
+
 		layer = LayerOfAtom(index)
-	
+
+		isnothing(layer) && return nothing 
+
 		atoms = IndsAtomsOfLayer(layer)
-	
-		return ("Layer",layer),(if length(atoms)==1 Colon()
-#														elseif isnothing(Nr_Orbitals) nothing
-														else 
-	
-			TBmodel.Hamilt_indices(	vcat(1:Nr_Orbitals...),
-															findfirst(isequal(index),atoms),
+
+		isnothing(atoms) && return nothing
+
+		length(atoms) == 1 && return ("Layer",layer),(Colon(),)
+		
+		return ("Layer",layer), (TBmodel.Hamilt_indices(vcat(1:Nr_Orbitals...),
+															indexin(index,atoms)[1],
+															#findfirst(isequal(index),atoms),
 															Nr_Orbitals)
-														end,)
+														,)
 
 	end
 		
 end
+
 #===========================================================================#
 #
 #	Sanity check for the atom <--> layer relationship:
@@ -508,7 +597,7 @@ end
 #---------------------------------------------------------------------------#
 
 
-function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLayer, kwargs...)
+function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLayer, IndsAtomsOfLayer, Nr_Orbitals=nothing, kwargs...)
 
 	isempty(Leads) && return Dict(),Dict()
 
@@ -531,10 +620,8 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 
 		for (side,n) in keys(lead_distrib)
 
-			if all(layers .== n) 
-				
-				push!(lead_distrib[(side,n)],iL)
-			end
+			all(isequal(n), layers) && push!(lead_distrib[(side,n)],iL)
+
 		end	
 	end
 
@@ -565,8 +652,8 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 	SideOfLead, LeadsOfSide_ = Utils.FindPartners([string(Leads[i][:label])=>string(side) for ((side,n),I) in lead_distrib for i in I ], sortfirst=string)
 
 
-	LeadsOfSide(s) = LeadsOfSide_(string(s))
 
+	LeadsOfSide(s) = LeadsOfSide_(string(s))
 
 	length(VirtLeads) > length(LeadSizes) && return (
 																									 
@@ -576,9 +663,36 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 										))
 
 
+	nr_at = sum(length.(IndsAtomsOfLayer.(1:NrLayers)))
+
+	AtomsInLead,LeadOfAtom = Utils.FindPartners(LeadAtomOrder(nr_at; VirtLeads...))
+
+
+
+	slicer(name::Symbol,index::Int64) = slicer(string(name),index)
+
 	function slicer(name::String,index::Int64)
 
 		name in ["LeftLead","RightLead"] && return (name,index),(Colon(),)
+
+		if name=="Atom"
+
+			lead = LeadOfAtom(index)
+		
+			isnothing(lead) && return nothing
+
+			out1, (slice1, ) = slicer(lead[1]...)
+	
+			i_at = indexin(index, AtomsInLead(lead[1]))[1]
+
+			slice2 = TBmodel.Hamilt_indices(1:Nr_Orbitals, i_at, Nr_Orbitals)
+
+			slice1 isa Colon && return out1, (slice2, )
+
+			return out1, (slice1[slice2],)
+
+		end
+
 
 		side = SideOfLead(name)
 
@@ -613,45 +727,112 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function LeadLayerSlicer(;LeadSlicer=nothing,kwargs...)
+function LeadLayerSlicer(;NrLayers, IndsAtomsOfLayer, LeadSlicer=nothing, Nr_Orbitals=nothing, kwargs...)
 
-	layer_slicer = LayerSlicer(;kwargs...)
+	layer_slicer = LayerSlicer(;IndsAtomsOfLayer=IndsAtomsOfLayer, Nr_Orbitals=Nr_Orbitals, kwargs...)
 														
+#kwargs: NrLayers, LayerOfAtom, IndsAtomsOfLayer, AtomsOfLayer, Nr_Orbitals, SideOfLead, LeadsOfSide, LeadSlicer
 
-	slicer(name::Symbol,index::Int64,args...) = slicer(string(name),index,args...)
-	slicer(name::Symbol,index::Int64) = slicer(string(name),index)
-	
-		
 
-	function slicer(name::String,index::Int64,args...)
+	function slicer(name::Union{String,Symbol}, index::Int64, args...)
 
-		ni1,slice1 = slicer(name,index)
+		out1 = slicer(string(name), index)
 
-		ni2,slice2 = slicer(args...)
+		isnothing(out1) && return nothing 
+
+		out2 = slicer(args...)
+
+		isnothing(out2) && return nothing 
+
+		(ni1,slice1),(ni2,slice2) = out1,out2
+
 
 		return (ni1...,ni2...),(slice1...,slice2...)
 	
 	end
 
 
-	function slicer(name::String,index::Int64)
+	function slicer(name_::Union{String,Symbol}, index::Int64)
 
-		name in ["Atom","Layer"] && return layer_slicer(name,index)
+		name = string(name_)
+
+		out = layer_slicer(name, index)
+		
+		!isnothing(out) && return out
+								# isnothing(out) means the atom is in one of the leads
 
 		return LeadSlicer(name,index)
 
 	end
 
+
 	return slicer
+
 end
 
 
 
 
+#function LeadAtomSlicer(IndsAtomsOfLayer,NrLayers,LeadSlicer,Nr_Orbitals,VirtLeads...)
 
 
 
+#nd 
+#
+#===========================================================================#
+#
+#	
+#
+#---------------------------------------------------------------------------#
 
+function get_hoppings(dev_hopp, LeadLayerSlicer, VirtLeads) 
+
+"""
+	input: 
+				i and j, atom indices, including leads
+				Ri and Rj, the corresponding positions
+	______
+
+	output: hopping matrix between sites i and j
+			
+"""
+
+
+# intercell is given in the u direction, uc -> uc+1 
+#	coupling from lead to the system
+
+#(master_lead, unit_cell),atom_slice 	= LeadLayerSlicer(lead_name, unit_cell)
+#																= LeadLayerSlicer("Atom", atom_index)
+
+	function ((i,j),Rij=nothing)
+
+		(K1, u1, K2, u2), slice = LeadLayerSlicer("Atom",i,"Atom",j)
+
+		if all(isequal("Layer"),[K1,K2]) 
+			
+			!isnothing(Rij) && return dev_hopp(Rij...)
+
+			error("Provide (Ri,Rj)!")
+
+		end
+
+		T = typeof(first(keys(VirtLeads)))
+	
+		K2=="Layer" && return VirtLeads[T(K1)][:coupling][slice...]
+		
+		K1=="Layer" && return VirtLeads[T(K2)][:coupling]'[slice...]
+	
+
+		K1==K2 || error("Lead to lead hopping?")
+	
+
+		h = VirtLeads[T(K1)][u1==u2 ? :intracell : :intercell][min(u1,u2,end)]
+		
+		return (u1<=u2 ? h : h')[slice...] 
+
+	end
+
+end
 
 
 #===========================================================================#

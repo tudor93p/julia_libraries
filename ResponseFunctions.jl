@@ -179,13 +179,17 @@ function SiteTransmission(BondT, Bonds, RBonds)
 
 	nr_at = length(unique(vcat(vcat.(Bonds...)...)))
 
-	siteT = zeros(nr_at * length(RBonds[1][1]) )
+	siteT = zeros(nr_at, length(RBonds[1][1]) )
 
 	for ((i,j),(Ri,Rj),Tij) in zip(Bonds, RBonds, BondT)
 
-		siteT[ i .+ [0,nr_at] ] +=  Tij * (Rj-Ri)
+		siteT[ i, : ] +=  Tij * (Rj-Ri)
+		siteT[ j, : ] += -Tij * (Ri-Rj)
 
-		siteT[ j .+ [0,nr_at] ] += -Tij * (Ri-Rj)
+#		siteT[ i .+ [0,nr_at] ] +=  Tij * (Rj-Ri)
+
+
+#		siteT[ j .+ [0,nr_at] ] += -Tij * (Ri-Rj)
 		
 	end
 

@@ -57,6 +57,34 @@ function mapif(f::Function,pred::Function,itr)
 
 end
 
+
+#===========================================================================#
+#
+#	Dense matrix from lists of indices and values
+#				(each row in inds represents a catesian index)
+#
+#---------------------------------------------------------------------------#
+
+function Array_from_ListIndsVals(inds::AbstractMatrix, vals)
+
+	inds, vals = collect(inds), collect(vals)
+
+	isList(vals) || error("Wrong type")
+
+	v0 = first(vals)
+
+	A = zeros(typeof(first(v0)), size(v0)..., maximum.(eachcol(inds))...)
+
+	for (I,V) in zip(eachrow(inds), vals)
+		
+		A[fill(:, ndims(V))..., I...] = V 
+
+	end 
+
+	return A
+
+end
+
 #===========================================================================#
 #
 #	Cumulative sum for a list of lists
@@ -218,8 +246,16 @@ end
 function isList(arg::T,Ti=Any) where T
 
 	if T <: Type 
-		
-		return any(S -> arg<:S, [AbstractVector{<:Ti},Tuple{Vararg{<:Ti}}])
+	
+		arg<:Tuple{Vararg{<:Ti}} && return true 
+
+		for S in [AbstractVector, AbstractRange, AbstractSet]
+
+			arg <: S{<:Ti} && return true 
+
+		end 
+
+		return false 
 
 	else
 
@@ -277,17 +313,21 @@ function FindPartners(pairs12;sortfirst=nothing)
 	pairs21 =	begin
 
 							local K = vcat(keys(pairs12)...)
-						
+					
 							isa(sortfirst,Bool) && sortfirst && sort!(K)
 
-							typeof(sortfirst)<:Function && sort!(K,by=sortfirst)
+							isa(sortfirst,Function) && sort!(K, by=sortfirst)
 
-							local V = unique(values(pairs12))
+							local V = unique(vcat(values(pairs12)...))
 
-							Dict(v=>filter(k->pairs12[k]==v,K) for v in V)
+							Dict(v=>filter(k->in(v,vcat(pairs12[k])),K) for v in V)
+
 						end
 
-	return key1 -> pairs12[key1], key2->pairs21[key2]
+
+
+	return (key1 -> get(pairs12, key1, nothing), 
+					key2 -> get(pairs21, key2, nothing))
 
 
 #	return (key,label="") -> label==label1 ? pairs12[key] : pairs21[key]
@@ -639,9 +679,13 @@ function Write_NamesVals(filename=nothing, filemethod="new"; tol=1e-7)
 
 
 
-  function new_item(name,val,outdict=Dict())
+  function new_item(name, val, outdict::AbstractDict=Dict())
 
-		outdict[name] = write_(name,writable(val,name))
+		if !isnothing(name) & !isnothing(val)
+
+			outdict[name] = write_(name,writable(val,name))
+
+		end 
 
     return outdict
 
@@ -676,6 +720,165 @@ end
 
 
 
+
+#===========================================================================#
+#
+# Prepare dict for writing by flattening its values 
+# 										(if array, use cartesian inds for the new keys)
+#
+#---------------------------------------------------------------------------#
+
+function flattenDictEntries(D::AbstractDict; onlykeys=false)
+
+	any(occursin.("_",keys(D))) && error("The keys already contain the character '_'. The result will not be read correctly.")
+
+	T = typeof( first(D).second )
+
+	T<:Number && return onlykeys ? collect(keys(D)) : D
+	
+	T<:AbstractArray || error("$T not supported")
+
+	key(k,I) = string(k, "_", join(Tuple(I),"-")) 
+
+	iter = ((k,I,V[I]) for (k,V) in pairs(D) for I in CartesianIndices(V))
+
+	onlykeys && return [key(k,I) for (k,I,v) in iter]
+
+	return Dict(key(k,I)=>v for (k,I,v) in iter)
+
+end								
+
+
+
+#function restoreDictEntries(d::AbstractDict)
+#
+#	!occursin("-",first(keys(d))) && return d 
+#
+#	K = collect(keys(d))
+#
+#	sK = hcat(split.(K,"-")...)
+#
+#	return Dict(map(unique(sK[1,:])) do label 
+#
+#		select = label.==sK[1,:]
+#		
+#		return label => Array_from_ListIndsVals(
+#												transpose(parse.(Int, sK[2:end, select])),
+#												[d[k] for k in K[select]])
+#	end)
+#
+#end 
+
+function restoreDictEntries(matrix::AbstractMatrix, legend)
+											
+	K = legend[:]
+
+	!all(occursin.("_",K)) && return Dict(zip(K,eachcol(matrix)))
+
+	sK = hcat(map(legend) do L
+					
+						left,right = split(L,"_")
+
+						return vcat(left,split(right,"-"))
+
+					 end...)
+
+#	column: [label, inds...]
+
+
+	return Dict(map(unique(sK[1,:])) do label 
+
+		select = label.==sK[1,:] 	# all elements corresp to label
+		
+		return label => Array_from_ListIndsVals(
+												transpose(parse.(Int, sK[2:end, select])),
+												eachcol(matrix[:,select])
+																						)
+	end)
+
+end 
+
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function SliceVector_LikeArraysInList(arrays, out_vector)
+
+	boundaries = cumsum([0;length.(arrays)])
+
+	return [out_vector[boundaries[i]+1:boundaries[i+1]] 
+																									for i in axes(arrays,1)]
+
+#	isnothing(out_vector) && return inds
+
+#	return [out_vector[i] for i in inds]
+
+end
+
+#===========================================================================#
+#
+#	Write physical observable. Possibly with a legend file
+#
+#---------------------------------------------------------------------------#
+
+
+function Write_PhysObs(filename=nothing, filemethod="new"; tol=1e-7)
+
+	Write, = Write_NamesVals(filename, filemethod; tol=tol)
+	
+
+	function legend_and_matrix(vals)
+
+		concat(f=vcat) = vcat([reshape(f(v),1,:) for v in vals]...)
+
+		isa(vals[1],Number) | isList(vals[1],Number) && return nothing,concat()
+
+		vals[1] isa AbstractDict || error(typeof(vals[1])," not supported")
+
+		K = sort(flattenDictEntries(vals[1], onlykeys=true))
+
+		return (K, concat(v->(D->[D[k] for k in K])(flattenDictEntries(v))))
+
+	end
+
+
+	function new_item(obs, vals, outdict=Dict())
+
+		legend,matrix = legend_and_matrix(vals)
+
+		return Write(obs, matrix, Write(obs*"_Legend", legend, outdict))
+				
+	end
+  return new_item,Dict()
+
+end
+
+
+
+
+function Read_PhysObs(filename, names)
+
+	suffix = "_Legend"
+
+	out = Read_NamesVals(filename, [names; names .* suffix])
+											 
+	for k in [split(k,suffix)[1] for k in keys(out) if occursin(suffix,k)]
+
+		out[k] = restoreDictEntries(pop!(out, k), pop!(out, k*suffix))
+
+	end
+
+	return out 
+
+end 
 
 
 #===========================================================================#
@@ -1078,7 +1281,7 @@ end
 #
 #
 ##
-##    names = Utils.Assign_Value(names,string.(["Parameter "],1:size(params,1)))
+##    names = .Assign_Value(names,string.(["Parameter "],1:size(params,1)))
 ##   
 ##   
 ##  

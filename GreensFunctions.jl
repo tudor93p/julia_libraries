@@ -440,7 +440,9 @@ end
 
 function DOS(Gr; Op=[1], kwargs...)
 
-	Operators.Trace("orbitals", Op; sum_up=true, kwargs...)(-1/pi*imag(LA.diag(Gr)))
+	trace = Operators.Trace("orbitals", Op; sum_up=true, kwargs...)
+	
+	return trace(-1/pi*imag(LA.diag(Gr)))
 
 
 end
@@ -452,59 +454,21 @@ end
 #---------------------------------------------------------------------------#
 
 
-function AllAtoms_Decimation(Latt; LeftLead=nothing,RightLead=nothing)
+function LDOS_Decimation(GD, NrLayers, indsLayer; Op=[1], VirtLeads...)
 
-	Atoms = (Latt isa AbstractMatrix) ? Latt : Latt.PosAtoms()
+	dev_atoms = Dict(("Layer",L) => indsLayer(L) for L in 1:NrLayers)
 
-	vcat(Atoms,[vcat(L[:head]...) 
-												for L in [LeftLead,RightLead] if !isnothing(L)]...)
+	nr_at = mapreduce(length, +, values(dev_atoms))
 
-end
+	lead_atoms = LayeredSystem.LeadAtomOrder(nr_at; VirtLeads...)
 
-
-
+	ldos = zeros( mapreduce(length, +, values(lead_atoms), init=nr_at) )
 
 
-function LDOS_Decimation(GD, NrLayers, indsLayer; 
-												 				Op=[1], LeftLead=nothing, RightLead=nothing)
+	for d in (dev_atoms,lead_atoms), (key,inds) in pairs(d)
 
-# corresponding to vcat(Atoms,LeftLead...,RightLead...)
+		ldos[inds] = LDOS(GD(key...); Op=Op, nr_at = length(inds))
 
-
-	LNames,LSizes = begin
-
-		local Ls = [LeftLead,RightLead]
-
-		local I = findall(!isnothing,Ls)
-
-		["LeftLead","RightLead"][I],[size.(Ls[i][:head],1) for i in I]
-
-	end
-
-	indsLayers = indsLayer.(1:NrLayers)
-
-	nr_at = mapreduce(length,+,indsLayers)
-
-	cumLSizes = Utils.recursive_cumsum(LSizes,nr_at)
-
-	ldos = zeros(isempty(LSizes) ? nr_at : cumLSizes[end][end])
-
-
-	for (L,inds) in enumerate(indsLayers)
-
-		ldos[inds] = LDOS(GD("Layer",L); Op=Op, nr_at=length(inds))
-
-	end
-
-
-
-	for (LN,LS,cLS) in zip(LNames,LSizes,cumLSizes)
-																			 
-		for (uc,(nr_at,cls)) in enumerate(zip(LS,cLS))
-
-			ldos[cls-nr_at+1:cls] = LDOS(GD(LN,uc),Op=Op,nr_at=nr_at)
-
-		end
 	end
 
 	return ldos
@@ -515,25 +479,22 @@ end
 
 
 
-function DOS_Decimation(GD, NrLayers, indsLayer; Op=[1], LeftLead=nothing, RightLead=nothing)
+function DOS_Decimation(GD, NrLayers, indsLayer; Op=[1], VirtLeads...) 
 
 	out = 0.0
 
-	for i in 1:NrLayers
-		out += DOS(GD("Layer",i),Op=Op,nr_at=length(indsLayer(i)))
-	end
 
-	for (LN,L) in (("LeftLead",LeftLead),("RightLead",RightLead))
 
-		if !isnothing(L)
-	
-			for (uc,atoms) in enumerate(L[:head])
-	
-				out += DOS(GD(LN,uc),Op=Op,nr_at=size(atoms,1))
+	for d in (pairs(LayeredSystem.LeadAtomOrder(;VirtLeads...)),
+						(("Layer",L)=>indsLayer(L) for L=1:NrLayers))
 
-			end
+		for (key,inds) in d
+
+			out += DOS(GD(key...), Op=Op, nr_at=length(inds))
+
 		end
 	end
+
 
 	return out
 
@@ -545,11 +506,11 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function GFmagnitude(g)#,Energies,filename=nothing)
+#function GFmagnitude(g)#,Energies,filename=nothing)
 
-	LA.norm(LA.eigvals(g))
+#	LA.norm(LA.eigvals(g))
 
-end
+#end
 
 #===========================================================================#
 #
