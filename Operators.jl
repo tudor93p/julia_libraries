@@ -3,9 +3,8 @@ module Operators
 import LinearAlgebra; const LA = LinearAlgebra
 import SparseArrays; const SpA = SparseArrays
 #import DelimitedFiles; const DlmF = DelimitedFiles
-#using Einsum
 
-import Utils,TBmodel
+import Utils, TBmodel, Algebra
 
 
 
@@ -67,6 +66,167 @@ end
 
 
 	# ----- expectation of the position operator ----- #
+
+
+function Decode_PositionExpVal(str;err=false)
+	
+	good(A...) = any(isequal(str), A)
+									 
+	for (d,A) in enumerate(["X","Y","Z"])
+	
+		good(A) && return d, identity
+	
+		good("|$A|") && return d, abs
+	
+		good(A*"2", "|$A|2") && return d, abs2 
+		
+		good(A*"3") && return d, x->x^3
+
+		good("|$A|3") && return d, x->abs(x)^3
+
+		good(A*"4", "|$A|4") && return d, x->x^4 
+	
+	end 
+
+	err && error("'$str' not understood")
+
+	return nothing,nothing
+
+end 
+
+
+
+function Partial_PositExpect_fromLDOS(
+					Prob::AbstractMatrix, atoms::AbstractMatrix, str::AbstractString;
+					kwargs...)
+
+	Partial_PositExpect_fromLDOS(Prob, atoms,
+															 Decode_PositionExpVal(str, err=true)...;
+															 kwargs...)
+
+end
+
+
+
+function Partial_PositExpect_fromLDOS(
+								Prob::AbstractMatrix, atoms::AbstractMatrix,
+								dim::Int, f::Function=identity; 
+								convolute=false, delta=0.3,
+								kwargs...)
+
+# P[energy, atom] = LDOS at energy, on atom 
+# or: P[wf_index, atom] = localiz.prob on atom of a certain wf
+
+#	A = the coordinates 'dim'. B =  the perpendicular
+
+
+
+	dim_perp = ifelse(dim==1, 2, ifelse(dim==2, 1, nothing)) 
+
+
+	function out(get_ylim_Pf, param_B)
+
+		ylim, Prob_and_fA = get_ylim_Pf()
+
+		exp_vals = zeros(length(param_B), size(Prob,1)) 
+	
+		for i in axes(exp_vals,1)
+
+			Pi,fi = Prob_and_fA(i)
+	
+			exp_vals[i,:] = Algebra.Normalize_Rows(Pi,1)*fi
+	
+#			exp_vals[i,:] = LA.norm.(eachrow(Pi),1)
+
+		end
+		#	out[energy,some_y] = 	(sum over i in atoms_at_y)(P[energy, i] * f(x[i]))
+		#												/(sum ...) P[energy, i]
+	
+
+#		exp_vals = Algebra.Normalize_Columns(exp_vals, 1)
+
+
+
+		return (param_B, exp_vals, ["x","y","z"][dim_perp], extrema(ylim))
+
+	end
+
+
+
+	if !convolute
+
+		uniq_B, inds_B = Utils.Unique(atoms[:, dim_perp], inds="all", sorted=true)
+
+		return out(uniq_B) do 
+
+			f_A = f.(atoms[:,dim])
+
+			return (f_A, function(i) 
+
+											inds_B[i] |> I -> (Prob[:,I], f_A[I])
+
+									end)
+
+		end
+
+
+	end  
+
+
+
+	
+
+
+	(A,dense_A,w_A), (B,dense_B,w_B) = map((dim,dim_perp)) do d
+	
+		v = atoms[:,d]
+	
+		u = Utils.Unique(v, sorted=true)
+
+		m,M = extrema(u)
+
+#		m,M = [m,M] .+ (d==dim)*[1,-1]*1/4*(M-m) # disregard edges
+	
+		return (v, range(m, M, length=150), minimum(diff(u))*delta)
+	
+	end
+
+
+	return out(dense_B) do 
+
+		convProb = Prob*Algebra.get_CombinedDistribution(
+												(A, B),
+												(repeat(dense_A, outer=length(dense_B)),
+																 repeat(dense_B, inner=length(dense_A))),
+												(w_A, w_B);
+												weights="Lorentzian", normalize=false)
+
+		LI = LinearIndices((axes(dense_A,1), axes(dense_B,1)))
+
+		f_A = f.(dense_A)
+
+		return (f_A, function(i)
+
+						(convProb[:,LI[CartesianIndices((axes(dense_A,1), i))][:]],f_A)
+
+				end)
+	end
+
+#	return out(get_ylim_Pf, dense_B)
+
+
+
+
+#	L = Lorentzian with withd dB/5 or dA/5
+#	P(R) = mapreduce(+, axes(atoms,1)) do i 
+#				mapreduce(a->L(a[1]-a[2]), *, zip(R,atoms[i,:]), init=LDOS[i])
+#			end
+
+			
+end
+
+
+
 
 
 function Position_Expectation(axis::Int64,Rs::Matrix{Float64};

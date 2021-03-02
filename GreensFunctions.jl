@@ -4,8 +4,7 @@ module GreensFunctions
 import LinearAlgebra; const LA = LinearAlgebra
 ##import SparseArrays; const SpA = SparseArrays
 
-import Utils,Operators,TBmodel
-import Graph,LayeredSystem
+import Utils, TBmodel, Graph, LayeredSystem
 
 
 #===========================================================================#
@@ -75,7 +74,23 @@ SelfEn(args...) = sum(SelfEn.(args))
 			#	if more than one tuple is give
 
 
+function SelfEn_fromGDecim(G, VirtLeads, LeadLayerSlicer)
 
+	function (k,i=1)  
+
+		(K,i),slice = LeadLayerSlicer(k,i)
+
+		inter = VirtLeads[typeof(first(keys(VirtLeads)))(K)][:intercell]
+
+		dir = Dict("LeftLead"=>"left","RightLead"=>"right")[K]
+
+		return SelfEn(inter[min(i,end)]'[slice...,slice...],
+																	G(string(k),i+1,dir=dir)
+																		)
+	end
+
+
+end 
 
 
 #===========================================================================#
@@ -426,79 +441,6 @@ end
 
 
 
-#===========================================================================#
-#
-# Local DOS from a Green's function given as a matrix
-#
-#---------------------------------------------------------------------------#
-
-function LDOS(Gr; kwargs...)
-
-	DOS(Gr; sum_up=false, kwargs...)
-
-end
-
-function DOS(Gr; Op=[1], kwargs...)
-
-	trace = Operators.Trace("orbitals", Op; sum_up=true, kwargs...)
-	
-	return trace(-1/pi*imag(LA.diag(Gr)))
-
-
-end
-
-#===========================================================================#
-#
-# Local DOS from a Green's function given as a function of layers
-#
-#---------------------------------------------------------------------------#
-
-
-function LDOS_Decimation(GD, NrLayers, indsLayer; Op=[1], VirtLeads...)
-
-	dev_atoms = Dict(("Layer",L) => indsLayer(L) for L in 1:NrLayers)
-
-	nr_at = mapreduce(length, +, values(dev_atoms))
-
-	lead_atoms = LayeredSystem.LeadAtomOrder(nr_at; VirtLeads...)
-
-	ldos = zeros( mapreduce(length, +, values(lead_atoms), init=nr_at) )
-
-
-	for d in (dev_atoms,lead_atoms), (key,inds) in pairs(d)
-
-		ldos[inds] = LDOS(GD(key...); Op=Op, nr_at = length(inds))
-
-	end
-
-	return ldos
-	
-end
-
-
-
-
-
-function DOS_Decimation(GD, NrLayers, indsLayer; Op=[1], VirtLeads...) 
-
-	out = 0.0
-
-
-
-	for d in (pairs(LayeredSystem.LeadAtomOrder(;VirtLeads...)),
-						(("Layer",L)=>indsLayer(L) for L=1:NrLayers))
-
-		for (key,inds) in d
-
-			out += DOS(GD(key...), Op=Op, nr_at=length(inds))
-
-		end
-	end
-
-
-	return out
-
-end
 
 #===========================================================================#
 #

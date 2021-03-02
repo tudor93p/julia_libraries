@@ -5,8 +5,10 @@ import SparseArrays; const SpA = SparseArrays
 import Dates
 
 import DelimitedFiles; const DlmF = DelimitedFiles
+import FileIO#,JLD
 
 using OrderedCollections:OrderedDict
+
 
 
 
@@ -17,12 +19,12 @@ using OrderedCollections:OrderedDict
 #
 #---------------------------------------------------------------------------#
 
-function Rescale(A, mM0)
-
+function Rescale(A, mM0, mM1=A)
+	
   m0,M0 = extrema(mM0)
 
-	m,M = extrema(A)
-
+	m,M = extrema(mM1)
+	
 	return (A .- m)*(M0-m0)/(M-m) .+ m0
 
 end
@@ -32,6 +34,70 @@ end
 #
 #
 #---------------------------------------------------------------------------#
+is_float(S) = any(Ti -> S<:Ti, [Float64, Complex{<:Float64}])
+
+is_exact(S) = any(Ti -> S<:Ti, [Integer, Rational, AbstractString, AbstractChar, Complex{<:Integer}, Complex{<:Rational}])
+
+
+
+function Unique(V::AbstractArray{T}; 
+								tol=1e-8, inds=nothing,
+								sorted=false,
+								check_type=true) where T
+
+#	v isa AbstractArray &&
+#	isList(v) || error("Type ",typeof(v)," not supported.")
+
+	if !check_type || is_exact(T) || all(is_exact.(typeof.(V)))
+
+		U = (sorted ? sort : identity)(unique(V))
+	
+		isnothing(inds) && return U
+
+		i_f = findfirst(inds.==["first","all","last"])
+
+		isnothing(i_f) && error("Cannot get indices with '$inds'")
+
+		f = [findfirst, findall, findlast][i_f]
+
+#		typeof(inds)<:Function || error("Cannot get indices with ", typeof(inds))
+	
+		return U, [f(isequal(u), V) for u in U]
+
+	end 
+
+
+	function get_newV()
+
+		is_float(T) && return round.(V, digits= Int(ceil(-log10(tol))))
+
+		fs, newT = typeof.(V) |> t -> (findall(is_float, t), promote_type(t...))
+
+		W = AbstractArray{newT}(V)
+	
+		W[fs] = round.(W[fs], digits=Int(ceil(-log10(tol))))
+
+		return W
+
+	end
+
+	I = Unique(get_newV(); tol=tol, inds=Assign_Value(inds, "first"),
+						 						 sorted=sorted, check_type=false)[2]
+
+	isnothing(inds) && return V[I]
+
+	return V[first.(I)], I
+
+
+end 
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
 
 function flatmap(f,itr)
 
@@ -56,6 +122,22 @@ function mapif(f::Function,pred::Function,itr)
 	filter(pred,map(f,itr))
 
 end
+
+function zipmap(args...)
+
+	zip(map(args...)...)
+
+end 
+
+invmap(arg, fs...) = invmap(arg, fs)
+
+function invmap(arg, fs)
+
+	map(f->f(arg), fs)
+
+end 
+
+
 
 
 #===========================================================================#
@@ -138,6 +220,39 @@ function recursive_cumsum(array::T,start=0) where T
 	end
 
 	return	out
+
+end
+
+
+
+#===========================================================================#
+#
+#	Apply function on a given axis. Interate the rest 
+#
+#---------------------------------------------------------------------------#
+
+
+
+function ApplyF_OnAxis(f::Function, y::AbstractArray, dim::Int64=1)
+
+	inds = setindex!(collect(Any, axes(y)), [:], dim)
+
+	i1 = first.(inds)
+
+	y_new1 = f(y[i1...])
+
+	y_new = zeros(eltype(y_new1),
+								setindex!(collect(size(y)), length(y_new1), dim)...)
+
+	y_new[i1...] = y_new1
+
+	for i in Base.Iterators.drop(Base.product(inds...),1)
+
+		y_new[i...] = f(y[i...])
+		
+	end
+
+	return y_new
 
 end
 
@@ -237,11 +352,16 @@ function IdentifyRanges(list)
 
 end
 
+
+
+
 #===========================================================================#
 #
-#	Block diagonal matrix 
+# check if arg is a vector or a tuple 
 #
 #---------------------------------------------------------------------------#
+
+
 
 function isList(arg::T,Ti=Any) where T
 
@@ -265,6 +385,12 @@ function isList(arg::T,Ti=Any) where T
 end
 
 #isList(a::Any,Ti=Any) = isList(typeof(a),Ti)
+
+#===========================================================================#
+#
+#	Block diagonal matrix 
+#
+#---------------------------------------------------------------------------#
 
 function BlkDiag(arg::T) where T
 	
@@ -290,6 +416,24 @@ BlkDiag(args...) = BlkDiag(args)
 
 
 
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function flat(list_of_lists...; keep=x->true)
+
+	i = findfirst(isList, list_of_lists)
+
+	isnothing(i) && return filter(keep, vcat(list_of_lists...))
+
+	return flat(list_of_lists[1:i-1]..., 
+							list_of_lists[i]..., 
+							list_of_lists[i+1:end]...;
+							keep=keep)
+
+end 
 
 #===========================================================================#
 #
@@ -501,7 +645,7 @@ function Distribute_Work(allparamcombs,do_work;arg_pos=1,kwargs0...)
 
   function print_progress(ip,t1)
 
-    println(string("\nI am ",idproc,"/",nr_scripts," and I completed ",ip,"/",length(which_)," jobs (last one: ",which_[ip],"/",which_," in ", round(Dates.value(Dates.now()-t1)/1000),"s)."))
+		println(string("\nI am ",idproc,"/",nr_scripts," and I completed ",ip,"/",length(which_)," jobs (last one: ",which_[ip],"/",which_," in ", Int(round(Dates.value(Dates.now()-t1)/1000)),"s)."))
 
 #    println(strout)
 
@@ -536,12 +680,31 @@ function Distribute_Work(allparamcombs,do_work;arg_pos=1,kwargs0...)
 
 #  return ([args_for_print(ip),p][2] for (ip,p) in enumerate(doparams))
 
-
+	return 
 
 
 end
 
 
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function Slice_LikeArraysInList(arrays, X, dims=1)
+
+	i,f = fill(Colon(), dims-1), fill(Colon(), ndims(X)-dims)
+
+	ms = cumsum([0;length.(arrays)]) |> B -> [B[j-1]+1:B[j] for j=2:length(B)]
+
+	return [X[i..., m, f...] for m in ms]
+
+#	isnothing(out_vector) && return inds
+
+#	return [out_vector[i] for i in inds]
+
+end
 
 #===========================================================================#
 #
@@ -573,17 +736,21 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Write_NamesVals(filename, filemethod, names, result, bounds; tol=1e-7)
+function Write_NamesVals(filename,  storemethod, names, result, bounds; tol=1e-7, filemethod="new")
 
-  new_item,outdict = Write_NamesVals(filename, filemethod, tol=tol)
+
+	Write!, outdict = Write_NamesVals(filename, storemethod;
+																		filemethod=filemethod,
+																		tol=tol)
+
 
   for (i,name) in enumerate(names)
 
-    outdict = new_item(name, result[:,bounds[i]+1:bounds[i+1]], outdict)
+ 		Write!(name, result[:,bounds[i]+1:bounds[i+1]], outdict)
 
   end
 
-  return new_item, outdict
+  return Write!, outdict
 
 #  outdict = new_item("kLabels",reshape(repeat(kLabels,inner=div(size(result,1),length(kLabels))),:,1),outdict)
 
@@ -634,8 +801,58 @@ end
 
 
 
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
 
-function Write_NamesVals(filename=nothing, filemethod="new"; tol=1e-7)
+
+function Extension_Storemethod(storemethod)
+
+	storemethod in ["dat","jld"] && return ".$storemethod"
+
+	error("The 'storemethod' $storemethod is not supported")
+
+end
+
+
+function isLegendFile(storemethod)
+
+	storemethod == "dat" && return x->occursin("_Legend",x)
+
+	storemethod == "jld" && return x->false
+
+	error("The 'storemethod' $storemethod is not supported")
+
+end 
+
+function Name_fromLegend(storemethod)
+
+	storemethod == "dat" && return x->split(x,"_Legend")[1]
+	
+	storemethod == "jld" && return identity
+
+	error("The 'storemethod' $storemethod is not supported")
+
+end 
+
+function LegendFile_fromName(storemethod)
+
+	storemethod == "dat" && return x->x*"_Legend"
+
+	storemethod == "jld" && return identity
+
+	error("The 'storemethod' $storemethod is not supported")
+
+end 
+
+
+
+
+function Write_NamesVals(filename, storemethod="jld"; 
+												 tol=1e-7, filemethod="new")
+
 
 	function writable(matrix::AbstractArray{<:Number}, name)
 
@@ -647,7 +864,7 @@ function Write_NamesVals(filename=nothing, filemethod="new"; tol=1e-7)
 
 			println()
 
-			error("Observable '$name' not real!")
+			@warn "Observable '$name' not real!"
 
 		end
 
@@ -655,35 +872,62 @@ function Write_NamesVals(filename=nothing, filemethod="new"; tol=1e-7)
 
 	end
 
-
-	writable(matrix::AbstractArray{<:String},name) = matrix
+	writable(matrix::AbstractArray{<:AbstractString},name) = matrix
 
 	writable(matrix::AbstractArray{<:Char},name) = matrix
 
 	writable(x::Number, name) = writable(vcat(x), name) 
 
-  function write_(name,matrix)
+	function writable(D::AbstractDict, name) 
+		
+		Dict(k=>writable(v,name) for (k,v) in pairs(D))
+
+	end 
+
+
+
+	ext = Extension_Storemethod(storemethod)
+
+
+  function write_(name, data)
 
     if !isnothing(filename) 
 
-      open(filename(name), filemethod=="append" ? "a" : "w") do fout
+			fn = filename(name)*ext
 
-         DlmF.writedlm(fout, matrix)
+			if storemethod=="dat"
 
-      end
+	      open(fn, filemethod=="append" ? "a" : "w") do fout
+
+  	       DlmF.writedlm(fout, data)
+
+    	  end
+
+			elseif storemethod=="jld"
+
+#				JLD.save(FileIO.File(FileIO.format"JLD",fn), name, data)
+				FileIO.save(FileIO.File(FileIO.format"JLD",fn), name, data)
+
+			end 
+
     end
     
-    return matrix
+    return data 
+		
   end
 
 
+	function new_item!((name, val), outdict::AbstractDict=Dict())
 
+		new_item!(name, val, outdict)
 
-  function new_item(name, val, outdict::AbstractDict=Dict())
+	end 	
+
+	function new_item!(name, val, outdict::AbstractDict=Dict())
 
 		if !isnothing(name) & !isnothing(val)
 
-			outdict[name] = write_(name,writable(val,name))
+			outdict[name] = write_(name, writable(val,name))
 
 		end 
 
@@ -692,31 +936,111 @@ function Write_NamesVals(filename=nothing, filemethod="new"; tol=1e-7)
   end
 
 
-  return new_item,Dict()
+  return new_item!,Dict()
 
 end
 
 
 
 
-function Read_NamesVals(filename,names)
+function Delete_NamesVals(filename, names, storemethod)
 
-  outdict = Dict()
+	ext = Extension_Storemethod(storemethod)
 
-  for name in (isa(names,String) ? [names] : names)
+	get_legend = LegendFile_fromName(storemethod)
 
-    if isfile(filename(name))
+	Ns = isa(names,AbstractString) ? [names] : names
 
-      outdict[name] = DlmF.readdlm(filename(name))
+#	println("\nDelete ",join(Ns,", "),"\n")
 
-    end
+	for fn in filename.(Ns)
 
-  end
+		rm.(filter(isfile, unique([fn,get_legend(fn)]).*ext))
 
-  return outdict
+	end 
 
 end
 
+
+
+
+
+
+function Read_NamesVals(filename, names, storemethod)
+	
+	names = isa(names,AbstractString) ? [names] : names
+
+	filenames = unique(filename.(names).*Extension_Storemethod(storemethod))
+
+
+	if storemethod=="jld"
+
+		FNs = filter(isfile, filenames)
+
+		isempty(FNs) && return Dict()
+
+		return merge(map(FNs) do fn 
+
+				FileIO.load(FileIO.File(FileIO.format"JLD",fn))
+
+		end...) 
+
+	elseif storemethod=="dat"
+
+	  outdict = Dict()
+	
+		for (n,fn) in zip(names,filenames)
+
+			if isfile(fn)
+
+				outdict[n] =DlmF.readdlm(fn)
+
+			end 
+	
+	  end
+	
+	  return outdict
+
+	end 
+
+end
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function is_dict_or_JLDAW(D)
+
+	D isa AbstractDict && return true 
+
+	all(in(propertynames(D)), [:keys, :values]) && return true
+
+	return false 
+
+end
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function FoundFiles_NamesVals(filename, names, storemethod)
+	
+	fn = filename.(vcat(names)).*Extension_Storemethod(storemethod)
+
+	return all(isfile, unique(fn))
+
+end
 
 
 
@@ -728,13 +1052,34 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function flattenDictEntries(D::AbstractDict; onlykeys=false)
+function flattenDictEntries(D::AbstractDict; onlykeys=false, 
+																							onlyvals=nothing,
+																							)
 
 	any(occursin.("_",keys(D))) && error("The keys already contain the character '_'. The result will not be read correctly.")
 
 	T = typeof( first(D).second )
 
-	T<:Number && return onlykeys ? collect(keys(D)) : D
+
+	onlykeys && !isnothing(onlyvals) && error("The kwargs 'onlykeys' and 'onlyvals' are mutually exclusive")
+
+#	getkeys(D) = [D[k] for k in Keys]
+
+	if T<:Number 
+		
+		onlykeys && return collect(keys(D))
+		
+		isnothing(onlyvals) && return D
+
+		onlyvals isa Bool && return collect(values(D))
+
+		onlyvals isa AbstractString && return D[onlyvals]
+
+		isList(onlyvals, AbstractString) && return [D[k] for k in onlyvals]
+
+		error("'onlyvals=$onlyvals' not supported")
+
+	end 
 	
 	T<:AbstractArray || error("$T not supported")
 
@@ -742,9 +1087,32 @@ function flattenDictEntries(D::AbstractDict; onlykeys=false)
 
 	iter = ((k,I,V[I]) for (k,V) in pairs(D) for I in CartesianIndices(V))
 
+
 	onlykeys && return [key(k,I) for (k,I,v) in iter]
 
-	return Dict(key(k,I)=>v for (k,I,v) in iter)
+	onlyvals isa Bool && return [v for (k,I,v) in iter]
+
+	if onlyvals isa AbstractString 
+	
+		for (k,I,v) in iter 
+
+			key(k,I)==onlyvals && return v
+
+		end
+
+	end
+
+
+
+	out = Dict(key(k,I)=>v for (k,I,v) in iter)
+
+	isnothing(onlyvals) && return out
+
+	isList(onlyvals, AbstractString) && return [out[k] for k in onlyvals]
+
+
+	error("'onlyvals=$onlyvals' not supported")
+
 
 end								
 
@@ -771,7 +1139,7 @@ end
 
 function restoreDictEntries(matrix::AbstractMatrix, legend)
 											
-	K = legend[:]
+	K = string.(legend[:])
 
 	!all(occursin.("_",K)) && return Dict(zip(K,eachcol(matrix)))
 
@@ -803,25 +1171,6 @@ end
 
 
 
-#===========================================================================#
-#
-#
-#
-#---------------------------------------------------------------------------#
-
-
-function SliceVector_LikeArraysInList(arrays, out_vector)
-
-	boundaries = cumsum([0;length.(arrays)])
-
-	return [out_vector[boundaries[i]+1:boundaries[i+1]] 
-																									for i in axes(arrays,1)]
-
-#	isnothing(out_vector) && return inds
-
-#	return [out_vector[i] for i in inds]
-
-end
 
 #===========================================================================#
 #
@@ -830,55 +1179,189 @@ end
 #---------------------------------------------------------------------------#
 
 
-function Write_PhysObs(filename=nothing, filemethod="new"; tol=1e-7)
+function Write_PhysObs(filename, storemethod; tol=1e-7)
 
-	Write, = Write_NamesVals(filename, filemethod; tol=tol)
+	function assert_type(v)
+
+		isa(v, Number) && return 1 
+		
+		isa(v, AbstractDict) && return 3 
+
+		isList(v, Number) && return 2 
+
+
+		error(typeof(v)," not supported")
+
+	end 
+
+
+	concat(f,vals) = vcat([reshape(f(v),1,:) for v in vals]...)
+# above: preallocate and avoid vcat ?
+
+	function get_legend(vals)
+
+		assert_type(vals[1]) in [1,2] && return nothing
+		
+		return sort(flattenDictEntries(vals[1], onlykeys=true))
+
+	end 
+
+	function get_matrix(vals)
+
+		assert_type(vals[1]) in [1,2] && return concat(vcat, vals)
+
+		return concat(v->flattenDictEntries(v; onlyvals=get_legend(vals)), vals)
+
+
+	end 
+
+	function get_data(vals)
+
+		assert_type(vals[1]) in [1,2] && return concat(vcat, vals)
+
+		K = collect(keys(vals[1]))
+
+		(T,S,I0) = vals[1][K[1]] |> a -> (eltype(a), size(a), fill(:, ndims(a)))
+
+		data = Dict(k=>zeros(T, (length(vals), S...)) for k in K) 
+
+		for (i,val) in enumerate(vals), (k,v) in pairs(val) 
+
+			data[k][i, I0...] = v
+
+		end
+
+		return data
+
+	end
+
+
+
+	Write!, = Write_NamesVals(filename, storemethod; tol=tol)
+
+	legend_file = LegendFile_fromName(storemethod)
+
+
+
+	function new_item!((obs, vals), outdict::AbstractDict=Dict())
+
+		new_item!(obs, vals, outdict)
+
+	end
+
+
+
+	function new_item!(obs, vals, outdict=Dict())
+		
 	
+#		legend,matrix,data = legend_matrix_data(vals)
+	
+		if storemethod=="jld"
 
-	function legend_and_matrix(vals)
+			#return 
+			Write!(obs, get_data(vals), outdict)
 
-		concat(f=vcat) = vcat([reshape(f(v),1,:) for v in vals]...)
+		elseif storemethod=="dat"
 
-		isa(vals[1],Number) | isList(vals[1],Number) && return nothing,concat()
+			Write!(obs, get_matrix(vals)) 
+								# ! careful ! this object is written, not returned 
 
-		vals[1] isa AbstractDict || error(typeof(vals[1])," not supported")
+			Write!(legend_file(obs), get_legend(vals), outdict)
 
-		K = sort(flattenDictEntries(vals[1], onlykeys=true))
+			outdict[obs] = get_data(vals)
 
-		return (K, concat(v->(D->[D[k] for k in K])(flattenDictEntries(v))))
+		end
+
+		return outdict
 
 	end
-
-
-	function new_item(obs, vals, outdict=Dict())
-
-		legend,matrix = legend_and_matrix(vals)
-
-		return Write(obs, matrix, Write(obs*"_Legend", legend, outdict))
-				
-	end
-  return new_item,Dict()
+	
+	
+	return new_item!,Dict()
 
 end
 
 
 
 
-function Read_PhysObs(filename, names)
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
 
-	suffix = "_Legend"
+FoundFiles_PhysObs = FoundFiles_NamesVals
 
-	out = Read_NamesVals(filename, [names; names .* suffix])
-											 
-	for k in [split(k,suffix)[1] for k in keys(out) if occursin(suffix,k)]
 
-		out[k] = restoreDictEntries(pop!(out, k), pop!(out, k*suffix))
+function Read_PhysObs(filename, names, storemethod)
+
+	if storemethod=="jld"
+
+		return Read_NamesVals(filename, names, storemethod)
+
+	elseif storemethod=="dat"
+
+		legf = LegendFile_fromName(storemethod)
+
+		obsf = Name_fromLegend(storemethod)
+
+		out = Read_NamesVals(filename, [names; legf.(vcat(names))], storemethod)
+													
+		for legend in filter(isLegendFile(storemethod), keys(out))
+
+			obs = obsf(legend)
+
+			!haskey(out, obs) && error("Legend exists, but no obs?")
+
+			out[obs] = restoreDictEntries(pop!(out, obs), pop!(out, legend))
+	
+		end
+	
+		return out 
+
+	end 
+
+end 
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+
+
+function ChangeStoreMethod_PhysObs(filename, names, source, dest)
+
+
+	if source!=dest 
+
+		Write!, = Utils.Write_NamesVals(filename,  dest)
+
+		for name in filter(!isLegendFile(source), vcat(names))
+
+#			println("\nMoving '$name' from '$source' to '$dest'\n")
+
+			Write!(name, Read_PhysObs(filename, name, source)[name])
+
+			Delete_NamesVals(filename, name, source)
+
+		end 
 
 	end
 
-	return out 
+	return FoundFiles_PhysObs(filename, names, dest)
+
+#	return true # if succesful, files exist 
 
 end 
+
 
 
 #===========================================================================#
@@ -949,6 +1432,23 @@ function get_arg(default,i,typ=String)
 
 end
 
+
+
+
+
+#===========================================================================#
+#
+# "inverse map" --> applies the same function to one argument 
+#
+#---------------------------------------------------------------------------#
+
+
+function imap(fs,args...)
+
+
+
+
+end 
 
 
 
@@ -1055,7 +1555,7 @@ end
 
 function DictRandVals(params::T) where T<:AbstractDict
 
-	return T(k=>(typeof(v) <: AbstractVector) ? rand(v) : v 
+	T(k=>(typeof(v) <: AbstractVector) ? rand(v) : v 
 												for (k,v) in pairs(params))
 
 end
@@ -1078,7 +1578,7 @@ end
 
 function DictFirstVals(params::T) where T<:AbstractDict
 
-	return T(k=>(typeof(v) <: AbstractVector) ? v[1] : v 
+	T(k=>(typeof(v) <: AbstractVector) ? v[1] : v 
 							for (k,v) in pairs(params))
 
 end
@@ -1363,23 +1863,22 @@ end
 
 function nr2string(nr::T,digits=2) where T
 
-	types = [Number,String]
 
-
-	if ((T<:Tuple) | (T<:AbstractArray))# && any(t->typeof(nr[1])<:t,types)
+	if T<:Union{Tuple,AbstractArray}# && any(t->typeof(nr[1])<:t,types)
 
 		return map(n->nr2string(n,digits),nr) |> join
 	
 	end
 
-	any(t->T<:t,types) || error("Please provide $types")
+	Union{Number,AbstractString} |> t-> T<:t || error("Please provide $t")
+
 
 
 	isempty(digits) && return string(nr)
 
 	digits isa Number && return nr2string(nr,[digits,digits])
 
-  if nr isa String
+  if nr isa AbstractString
 
     nr_ = tryparse(Float64,nr)
  
@@ -1673,7 +2172,7 @@ end
 #---------------------------------------------------------------------------#
 
 
-function Assign_Value(input_value,std_value)
+function Assign_Value(input_value, std_value)
 
   isnothing(input_value) && !isnothing(std_value) && return std_value
   

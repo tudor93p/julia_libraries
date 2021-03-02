@@ -19,7 +19,6 @@ module LayeredSystem
 
 import TBmodel,Utils,Graph
 import LinearAlgebra; const LA = LinearAlgebra
-#import GreensFunctions
 
 #===========================================================================#
 #
@@ -660,6 +659,7 @@ function Distribute_Leads(Leads, LeadContacts; NrLayers, LayerOfAtom, AtomsOfLay
 		VirtLeads, Dict(	:SideOfLead => SideOfLead, 
 											:LeadsOfSide => LeadsOfSide,
 											:LeadSlicer => nothing,
+
 										))
 
 

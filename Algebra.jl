@@ -1,14 +1,76 @@
 module Algebra
 
+#using Distributed 
+
 import LinearAlgebra; const LA = LinearAlgebra
 import SparseArrays; const SpA = SparseArrays
 #import PyCall
+
+
 import Utils
+
+gethostname()=="tudor-HP" && import Dierckx
 
 #export #PauliMatrices,OuterSum
 
 
 
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function Interp1D(x, y, k::Int)
+
+	if k==0
+
+		get_ind = Interp1D(vcat(x...), 1:length(x), 1)
+
+		out(X::Number) = y[Int(round(get_ind(X)))]
+
+		out(X::AbstractArray) = y[Int.(round.(get_ind(X)))]
+		
+		return out 
+
+	end 
+
+
+	return Dierckx.Spline1D(vcat(x...), vcat(y...), k=k)
+
+end 
+
+function Interp1D(x, y, k::Int, X)
+
+	Interp1D(x,y,k)(X)
+
+end
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function Mean(A::AbstractArray, dims::Union{Tuple,Int})
+
+	dims_ = unique(vcat(dims...))
+
+	i = [d in dims_ ? 1 : Colon() for d in 1:ndims(A)]
+
+	return sum(A, dims=dims)[i...]/prod(size(A)[dims_])
+
+end
+
+
+function Mean(A::AbstractArray, dims::Nothing=nothing)
+
+	sum(A)/length(A)
+
+end
 
 
 
@@ -135,7 +197,7 @@ function eigenvectors_degenerate_sectors(H; tol=1e-10)
 	eigen = LA.eigen(LA.Hermitian(Array(H)))
 
 
-	return [Algebra.GramSchmidt(eigen.vectors[:,s],2) 
+	return [GramSchmidt(eigen.vectors[:,s],2) 
 									for s in Utils.IdentifySectors(eigen.values; tol=tol)]
 
 end
@@ -273,9 +335,18 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function get_CombinedDistribution(values, centers, delta;
+function get_CombinedDistribution(args::Vararg{Any,3}; kwargs...)
+
+	unpack(x) = (typeof(x) <: Base.Generator) ? Tuple(x) : x
+
+	return get_CombinedDistribution_(unpack.(args)...; kwargs...)
+
+end 
+
+function get_CombinedDistribution_(values, centers, delta;
 																	weights = "Lorentzian",
 																	normalize=true, get_norm=false)
+
 
 	choose(A, i=1) = typeof(A)<:Tuple ? A[min(i,end)] : A
 
@@ -602,26 +673,26 @@ end
 
 function Gaussian(value,centers,width)
 
-  return exp.(-abs2.(reshape(centers,1,:) .- value)/width^2)/(width*sqrt(pi))
+  exp.(-abs2.(reshape(centers,1,:) .- value)/width^2)/(width*sqrt(pi))
 
 end
 
 function Lorentzian(value,centers,delta)
 
-  return 1/pi*delta./(abs2.(reshape(centers,1,:) .- value) .+ delta^2)
+  1/pi*delta./(abs2.(reshape(centers,1,:) .- value) .+ delta^2)
 
 end
 
 function Heaviside(value,centers,delta=0.0)
 
-  return 1.0*((reshape(centers,1,:) .- value) .<= delta)
+ 1.0*((reshape(centers,1,:) .- value) .<= delta)
 
 end
 
 
 function Rectangle(value,centers,delta)
 
-  return Heaviside(-value,-centers,delta/2) .* Heaviside(value,centers,delta/2) 
+  Heaviside(-value,-centers,delta/2) .* Heaviside(value,centers,delta/2) 
   
 #  return (-delta/2 .<= (reshape(centers,1,:) .- value) .<= delta/2)
 
@@ -666,40 +737,21 @@ end
 #---------------------------------------------------------------------------#
 
 
-function Normalize(x)
+function Normalize(A::AbstractArray, p::Real=2; dims=nothing, tol=1e-12)
 
-  return x/LA.norm(x)
+	isnothing(dims) && return A/LA.norm(A, p)
 
+	N = LA.norm.(eachslice(A, dims=dims), p)
+
+	N[N.<tol] .= tol
+
+  return A./reshape(N, [d==dims ? Colon() : 1 for d in 1:ndims(A)]...)
+										
 end
 
+Normalize_Columns(A::AbstractMatrix, p::Real=2) = Normalize(A, p, dims=2)
+Normalize_Rows(A::AbstractMatrix, p::Real=2) = Normalize(A, p, dims=1)
 
-
-function Normalize_Columns(A)
-
-  return A./reshape(LA.norm.(eachcol(A)),1,:)
-
-end
-
-
-function Normalize_Rows(A)
-
-  return A./reshape(LA.norm.(eachrow(A)),:,1)
-
-end
-
-
-#function MultiplyRows(matrix,vector)
-#
-#  return matrix .* reshape(vector,:,1)
-#
-#end
-#
-#
-#function MultiplyCols(matrix,vector)
-#
-#  return matrix .* reshape(vector,1,:)
-#
-#end
 
 #===========================================================================#
 #
@@ -814,12 +866,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function OuterBinary(U,V,op)
-
-
-  if !(ndims(U) in (1,2)) || !(ndims(V) in (1,2))
-    error("The arrays must be 1D or 2D!")
-  end
+function OuterBinary(U::AbstractVecOrMat, V::AbstractVecOrMat, op; flat=false)
 
 	ndims(U) == 1 && return OuterBinary(reshape(U,:,1),V,op)
 	
@@ -831,58 +878,50 @@ function OuterBinary(U,V,op)
 
 #  return [(op).(u,transpose(v)) for (u,v) in zip(eachcol(U),eachcol(V))]
 
+	(u1,u2),(v1,v2) = size(U),size(V)
+
+
+
+	out = zeros(promote_type(eltype(U), eltype(V)),
+							(flat ? u1*v1 : (u1,v1))...,
+							u2==v2 ? u2 : error("Wrong sizes"))
 	
-  return [(op).(u,reshape(v,1,:)) for (u,v) in zip(eachcol(U),eachcol(V))]
+
+	i0 = flat ? Colon() : (Colon(),Colon())
+
+	for i in 1:u2 
+
+		out[i0...,i] = view((op).(U[:,i], reshape(V[:,i],1,:)),i0...)
+	
+	end 
+	
+	return out 
+		#return [(op).(u,reshape(v,1,:)) for (u,v) in zip(eachcol(U),eachcol(V))]
 
 end
 
-  
-function OuterSum(args...)
 
-  return OuterBinary(args...,+)
+OuterSum(args...) = OuterBinary(args..., +)
 
-end
+OuterDiff(args...) = OuterBinary(args..., -)
 
-function OuterDiff(args...)
-
-  return OuterBinary(args...,-)
-
-end
-
-
-function OuterDist(args...)
-
-  return sqrt.(sum([abs2.(dXi) for dXi in OuterDiff(args...)]))
-
-end
+OuterDist(args...) = sqrt.(sum(abs2,OuterDiff(args...), dims=3)[:,:,1])
 
 
 #===========================================================================#
 # 
 # Flattened outer sum, each line S[k] is a sum of U[i_k] and V[j_k]
 #	S[k] = U[i] + V[j], with (i,j) = unravel_index(k,(len(U),len(V)))
-#						(true at least for python)
+#
 #---------------------------------------------------------------------------#
-
-function FlatOuterSum(args...)
   
-  return hcat([reshape(s,length(s)) for s in OuterSum(args...)]...)
 
-end
- 
+FlatOuterSum(args...) = OuterBinary(args...,+; flat=true)
 
-function FlatOuterDiff(args...)
+FlatOuterDiff(args...) = OuterBinary(args..., -; flat=true)
 
-  return hcat([s[:] for s in OuterDiff(args...)]...)
+FlatOuterDist(args...) = LA.norm.(eachrow(FlatOuterDiff(args...)))
 
-end
-
-function FlatOuterDist(args...)
-
-  return OuterDist(args...)[:]
-
-
-end
 
 
 #
@@ -899,8 +938,199 @@ end
 
 
 
+#===========================================================================#
+#
+# Distance equals 
+#
+#---------------------------------------------------------------------------#
+
+function EuclDistEquals(d0; tol=1e-8)
+
+	isd0(dist) = isapprox(dist, d0, atol=tol)
+
+	vtm(A::AbstractVector) = reshape(A,1,:)
+	vtm(A::AbstractMatrix) = A
+
+	return function(A::a, B::a) where {a<:T,b<:T} where T<:AbstractVecOrMat
+
+		a<:AbstractVector && b<:AbstractVector && return isd0(LA.norm(A-B))
+
+		return isd0.(OuterDist(vtm(A),vtm(B)))
+
+	end
 
 
+end 
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function get_Bonds(atoms::AbstractMatrix, bondlength::Number; 
+									 tol=1e-8, kwargs...)
+
+	get_Bonds(atoms, EuclDistEquals(bondlength; tol=tol); kwargs...)
+
+end 
+
+function get_Bonds(atoms::AbstractMatrix, isBond::Function; 
+									 inds=true, pos=false, as_matrices=false)
+
+
+  N = 5000    # for memory reasons
+
+	nr_at = size(atoms,1)
+
+	nr_batches = Int(ceil(nr_at/N))
+
+	batch_size = Int(ceil(nr_at/nr_batches))
+
+	batches = [(k-1)*batch_size+1:min(k*batch_size,nr_at) for k=1:nr_batches]
+
+
+
+	function get_pairs(b,c)
+		
+		d = isBond(atoms[batches[b],:], atoms[batches[c],:])
+
+		x0 = batch_size*([b,c].-1)
+
+		return sort([Tuple(sort(Tuple(x).+x0)) 
+										for x in findall(b!=c ? d : LA.triu(d,1))])
+
+	end
+	
+	bond_indices = sort(vcat([get_pairs(b,c) for b=1:nr_batches for c=1:b]...))
+
+	
+	if as_matrices
+
+		return get_Bonds_toMatrix(atoms, bond_indices; inds=inds, pos=pos)
+
+	end 
+
+	!pos && return bond_indices
+
+	bond_Rs = [[atoms[i,:] for i in ab] for ab in bond_indices]
+
+	return !inds ? bond_Rs : (bond_indices, bond_Rs)
+
+
+
+	
+
+
+
+
+
+
+
+	#	Rs[pair_index][member_index][coordinate_index]
+
+#	Rs = atoms[hcat(vcat.(b...)...),:]
+#	Rs[pair_index, member_index, coordinate_index]
+
+
+	
+#	return np.transpose(Rs[pairs,:dim],axes=(0,2,1)).reshape(-1,dim)
+
+
+end
+
+
+function get_Bonds_toMatrix(X; inds=false, pos=false)
+
+	xor(inds,pos) || error("Specify either 'inds' or 'pos'")
+
+
+	if inds 
+
+		bond_indices = X 
+
+		M_bond_indices = zeros(Int, length(bond_indices), 2)
+
+
+		for (i,(a,b)) in enumerate(bond_indices)
+
+			M_bond_indices[i, :] = [a,b]
+
+		end 
+
+		return M_bond_indices
+
+
+
+	elseif pos 
+
+		bond_Rs = X
+
+		M_bond_Rs = zeros(Float64, length(bond_Rs), sum(length.(bond_Rs[1])))
+
+		for (i,Rs) in enumerate(bond_Rs)
+
+			M_bond_Rs[i] = vcat(Rs...)
+
+		end 
+
+		return M_bond_Rs
+
+#	return !inds ? M_bond_Rs : (M_bond_indices, M_bond_Rs)
+	end 
+
+	return 
+
+end 
+
+
+
+
+function get_Bonds_toMatrix(atoms, bond_indices; inds=false, pos=false)
+
+	M_bond_indices = get_Bonds_toMatrix(bond_indices; inds=true)
+
+	if !pos 
+
+		inds && return M_bond_indices
+
+	else 
+		
+		M_bond_Rs = hcat(atoms[M_bond_indices[:,1]],atoms[M_bond_indices[:,2]])
+
+		inds && return (M_bond_indices, M_bond_Rs)
+
+		return M_bond_Rs
+
+	end 
+
+	return 
+
+end 
+
+
+
+
+
+function get_Bonds_fromMatrix(M; inds=false, pos=false)
+
+	xor(inds,pos) || error("Specify either 'inds' or 'pos'")
+	
+	inds && return Tuple.(eachrow(convert(Array{Int},M)))
+
+
+	pos && return map(eachrow(M)) do Rij 
+
+						n = div(length(Rij),2)
+
+						return [Rij[1:n],Rij[n+1:end]]
+				
+				end 
+
+end 	
 
 
 #############################################################################

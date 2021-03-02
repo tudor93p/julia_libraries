@@ -23,10 +23,10 @@ function get_eigen(H,evect=false;tol=1e-8,nr_bands=nothing,sigma=tol/10)
 
   if isnothing(nr_bands)
 
-    !evect && return (k) -> (LA.eigvals(LA.Hermitian(Array(H(k)))),nothing)
+    !evect && return k -> (LA.eigvals(LA.Hermitian(Array(H(k)))),nothing)
  
     
-    return (k)-> LA.eigen(LA.Hermitian(Array(H(k)))) |> e->(e.values,e.vectors)
+    return k-> LA.eigen(LA.Hermitian(Array(H(k)))) |> e->(e.values,e.vectors)
  
   end
 
@@ -39,7 +39,7 @@ function get_eigen(H,evect=false;tol=1e-8,nr_bands=nothing,sigma=tol/10)
 																ritzvec=evect)
 
 
-	evect && return (k) -> Areigs(k) |> function (e)
+	evect && return k -> Areigs(k) |> function (e)
 
 
 													order = sortperm(real(e[1]))
@@ -51,7 +51,9 @@ function get_eigen(H,evect=false;tol=1e-8,nr_bands=nothing,sigma=tol/10)
 
 												end
 
-	return (k) -> (sort(Areigs(k)[1],by=real),nothing)
+
+
+	return k -> (sort(Areigs(k)[1],by=real),nothing)
 
 
 end
@@ -81,7 +83,9 @@ end
 function Diagonalize(H, kPoints, filename=nothing; 
 										 kLabels=nothing,
 										 kTicks=[0],
-										 filemethod="new", parallel=false, operators=[[],[]],
+										 filemethod="new", 
+										 parallel=false, operators=[[],[]],
+										 storemethod="dat",
 										 tol=1e-8,  nr_bands=nothing, sigma=tol/10, kwargs...)
 
   k1 = kPoints[1,:]
@@ -137,8 +141,9 @@ function Diagonalize(H, kPoints, filename=nothing;
 
 
 
-  new_item, outdict = Utils.Write_NamesVals(filename, filemethod,
-																		["Energy";operators[1]], result, bounds)
+	Write!, outdict = Utils.Write_NamesVals(filename,  storemethod, 
+																		["Energy";operators[1]], result, bounds;
+																		tol=tol, filemethod=filemethod)
 
 
 
@@ -146,8 +151,8 @@ function Diagonalize(H, kPoints, filename=nothing;
 
 	if size(kPoints,1)==1
 	
-		return new_item("kLabels", 
-										reshape(range(0,1,length=size(result,1)),:,1), outdict)
+		return Write!("kLabels", reshape(range(0,1,length=size(result,1)),:,1), outdict)
+
 
 	end	
 
@@ -157,15 +162,12 @@ function Diagonalize(H, kPoints, filename=nothing;
 													 inner=div(size(result,1), length(kLabels))),:,1)
 
 
-	# kPoints should also be repeated!
+	# kPoints should also be repeated
 
+	Write!("kLabels", kLabels, outdict)
 
-	for (name,value) in zip( ["kLabels",  "kTicks"], #,"kPoints",], 
-														[kLabels, kTicks] )#, kPoints]	)
+	Write!("kTicks", kTicks, outdict)
 
-		outdict = new_item(name, value, outdict)
-
-	end
 
   return outdict
 
@@ -206,7 +208,7 @@ function TimeEvolution_expH(psi0,es,vs,ts,filename,operators=[[],[]];tol=1e-7)
 
 
 
-  Write, = Utils.Write_NamesVals(filename,tol=tol)
+  Write, = Utils.Write_NamesVals(filename; tol=tol)
 
   Write("Time",ts)
   Write("Eigenvals",es)
