@@ -804,7 +804,7 @@ function get_hoppings(dev_hopp, LeadLayerSlicer, VirtLeads)
 #(master_lead, unit_cell),atom_slice 	= LeadLayerSlicer(lead_name, unit_cell)
 #																= LeadLayerSlicer("Atom", atom_index)
 
-	function ((i,j),Rij=nothing)
+	function ((i,j), Rij=nothing)
 
 		(K1, u1, K2, u2), slice = LeadLayerSlicer("Atom",i,"Atom",j)
 

@@ -9,10 +9,49 @@ import SparseArrays; const SpA = SparseArrays
 
 import Utils
 
-gethostname()=="tudor-HP" && import Dierckx
+gethostname()=="tudor-HP" && import Dierckx,FFTW
 
 #export #PauliMatrices,OuterSum
 
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function fft(x::AbstractMatrix, w::Number=0; dim::Int=1, addup=true)
+	
+	E = exp.(-1im*w*(axes(x,dim).-1))
+
+	Y = Utils.multiply_elementwise(E, x, dim)
+
+	!addup && return Y
+	
+	return dropdims(sum(Y, dims=dim),dims=dim)
+
+end 
+
+
+function fft(x::AbstractVector, w::Union{Number,AbstractVector}=2pi*(axes(x,1).-1)/length(x); addup=true, kwargs...)
+
+	E = exp.(-1im*OuterBinary(w, axes(x,1).-1, *))
+
+	addup && return E*x
+
+	return E .* reshape(x,1,:)
+
+end 
 
 
 
@@ -866,47 +905,84 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function OuterBinary(U::AbstractVecOrMat, V::AbstractVecOrMat, op; flat=false)
 
-	ndims(U) == 1 && return OuterBinary(reshape(U,:,1),V,op)
+
+function OuterBinary(U::Tu, V::Tv, op::Function; flat=false)::AbstractArray where Tu<:T where Tv<:T where T<:Union{Number,AbstractVector}
 	
-	ndims(V) == 1 && return OuterBinary(U,reshape(V,:,1),op)
+	right_shape(a::Number) = hcat(a)
+	right_shape(a::AbstractVector) = reshape(a,:,1)
+
+	return dropdims(OuterBinary(right_shape(U), right_shape(V), op; flat=flat),
+									dims=3-flat)
+
+end 
 
 
-#  if  size(U,2) != size(V,2) # will produce an error
-#  end
+function OuterBinary(U::Tu, V::Tv, op::Function; flat=false, dim=1) where Tu<:T where Tv<:T where T<:AbstractMatrix
 
-#  return [(op).(u,transpose(v)) for (u,v) in zip(eachcol(U),eachcol(V))]
-
-	(u1,u2),(v1,v2) = size(U),size(V)
+	dim2 = 3 - dim # columns if dims=rows and reversed
 
 
+	sizes = map(enumerate(zip(size(U),size(V)))) do (d,(su,sv))
 
-	out = zeros(promote_type(eltype(U), eltype(V)),
-							(flat ? u1*v1 : (u1,v1))...,
-							u2==v2 ? u2 : error("Wrong sizes"))
+				if d==dim 
+
+					return flat ? su*sv : (su,sv)
+
+				else  
 	
+					su!=sv && error("Wrong sizes")
 
-	i0 = flat ? Colon() : (Colon(),Colon())
+					return su 
 
-	for i in 1:u2 
+				end 
 
-		out[i0...,i] = view((op).(U[:,i], reshape(V[:,i],1,:)),i0...)
+			end 
+
+
+
+	typ = Base.return_types(op, typeof.(first.((U,V)))) |> function (ts)
+
+					!isempty(ts) ? ts[1] : typeof(op(U[1],V[1])) # Any
+
+		end 
+
+
+	out = similar(Array{typ}, Utils.flat(sizes)...)
 	
+	i0 = fill(Colon(), 2-flat)
+
+
+#	for (i,(u,v)) in enumerate(zip(eachslice(U,dims=dim2), eachslice(V,dims=dim2)))
+
+
+	for i in 1:sizes[dim2]
+
+		setindex!(out,
+							view(op.(selectdim(U, dim2, i),
+											 reshape(selectdim(V, dim2, i), 1, :)
+											 ), i0...),
+							[i0,i][dim]..., [i0,i][dim2]...)
+		
 	end 
 	
 	return out 
-		#return [(op).(u,reshape(v,1,:)) for (u,v) in zip(eachcol(U),eachcol(V))]
 
 end
 
 
-OuterSum(args...) = OuterBinary(args..., +)
+OuterSum(args...; kwargs...) = OuterBinary(args..., +; kwargs...)
 
-OuterDiff(args...) = OuterBinary(args..., -)
+OuterDiff(args...; kwargs...) = OuterBinary(args..., -; kwargs...)
 
-OuterDist(args...) = sqrt.(sum(abs2,OuterDiff(args...), dims=3)[:,:,1])
+function OuterDist(args...; kwargs...) 
+	
+	D = get(kwargs, :dim, 1)==1 ? 3 : 1
 
+	return selectdim(sum(abs2, OuterDiff(args...; kwargs...), dims=D),
+									 D, 1) .|> sqrt  
+									
+end 
 
 #===========================================================================#
 # 
@@ -916,14 +992,19 @@ OuterDist(args...) = sqrt.(sum(abs2,OuterDiff(args...), dims=3)[:,:,1])
 #---------------------------------------------------------------------------#
   
 
-FlatOuterSum(args...) = OuterBinary(args...,+; flat=true)
+FlatOuterSum(args...; kwargs...) = OuterBinary(args..., +; kwargs..., flat=true)
 
-FlatOuterDiff(args...) = OuterBinary(args..., -; flat=true)
+FlatOuterDiff(args...; kwargs...) = OuterBinary(args..., -; kwargs..., flat=true)
 
-FlatOuterDist(args...) = LA.norm.(eachrow(FlatOuterDiff(args...)))
+function FlatOuterDist(args...; kwargs...) 
+	
+	LA.norm.(eachslice(FlatOuterDiff(args...; kwargs...),
+										 dims=get(kwargs,:dim,1)))
+
+end 
 
 
-
+#eachslice(D,dims=dim)
 #
 #
 #def FlatOuter_IndexConvert(U,V):
@@ -1069,7 +1150,9 @@ function get_Bonds_toMatrix(X; inds=false, pos=false)
 
 		bond_Rs = X
 
+
 		M_bond_Rs = zeros(Float64, length(bond_Rs), sum(length.(bond_Rs[1])))
+
 
 		for (i,Rs) in enumerate(bond_Rs)
 
@@ -1098,8 +1181,8 @@ function get_Bonds_toMatrix(atoms, bond_indices; inds=false, pos=false)
 		inds && return M_bond_indices
 
 	else 
-		
-		M_bond_Rs = hcat(atoms[M_bond_indices[:,1]],atoms[M_bond_indices[:,2]])
+	
+		M_bond_Rs = hcat(atoms[M_bond_indices[:,1],:], atoms[M_bond_indices[:,2],:])
 
 		inds && return (M_bond_indices, M_bond_Rs)
 

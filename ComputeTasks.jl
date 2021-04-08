@@ -32,7 +32,8 @@ get_taskname(t) = string(Base.fullname(t)[end])
 
 function rmv_add_summarize(; rmv_internal_key = nothing, 
 													 	 add_internal_param = nothing,
-														 constrained_params = nothing)
+														 constrained_params = nothing,
+														 kwargs...)
 
 	isnothing(constrained_params) && return (
 								Parameters.combine_functions_addrem(rmv_internal_key),
@@ -258,15 +259,17 @@ function missing_data(task; show_missing=false)
 
 #	nprocs()>1 && Random.shuffle!(allcombs)
 
-#	id = isequal(first(workers()))
+	id = isequal(first(workers()))
 
 	notdonecombs = allcombs[
 													
 		(nprocs()>1 ? pmap : map)(enumerate(allcombs)) do (i,c)
 
-#			id(myid()) && println(i,"/",length(allcombs))
+			out = !task.files_exist(c)
 
-			return !task.files_exist(c)
+			id(myid()) && println(i,"/",length(allcombs)," ",!out)
+
+			return out
 
 		end ]
 
@@ -475,6 +478,27 @@ end
 #
 #---------------------------------------------------------------------------#
 
+function restrict_number_subplots(d::Int, v::AbstractVector; max_nr_plotx=nothing, max_nr_ploty=nothing, kwargs...)
+
+	max_nr = [max_nr_plotx, max_nr_ploty][d.==[3,4]]
+
+	if !isempty(max_nr) && !isnothing(max_nr[1]) 
+		
+		N = Int(round(max_nr[1]))
+	
+		if length(v)>N
+			
+			inds = Utils.Rescale(1:N, axes(v,1)) .|> trunc .|> Int 
+
+			return v[inds]
+
+		end 
+
+	end 
+
+	return v
+
+end
 
 
 function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
@@ -484,7 +508,13 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 	internal_keys = OrderedDict(internal_keys_)
 
 	external_dims = [k for (k,v) in ext_par]
-	external_param = [collect(v) for (k,v) in ext_par]
+
+	external_param = map(ext_par) do (k,v)
+
+		restrict_number_subplots(k, collect(v); kwargs...)
+		
+	end 
+	
 
 	dim = length(internal_keys) + length(external_dims)
 
@@ -510,6 +540,8 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 
 	names, external_names = [["x","y","plotx","ploty"][d] for d in dims]
 
+
+
 	zname = filter(!in([names;external_names]),["x","y","z"])[1]
 
 
@@ -517,8 +549,14 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 																		replace(string(k),"_"=>" ") end
 
 
-	allparams = [sort(M.allparams(fill(nothing, minimum(l)-1)...)[k])
-										 														for (k,l) in internal_keys]
+	allparams = map(zip(internal_keys,internal_dims)) do ((k,l),d)
+
+		v = M.allparams(fill(nothing, minimum(l)-1)...)[k]
+
+		return restrict_number_subplots(d, sort(v); kwargs...)
+
+	end 
+
 
 	internal_params, internal_params_inds = [
 		collect(Base.product(q...))[:] for q in [allparams, axes.(allparams,1)]]
@@ -698,7 +736,6 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 		return (allparams, external_param)[pj][argmax(dims[pj].==i)]
 
 	end 
-
 
 	return ((get_plotparams, get_paramcombs, files_exist, get_data),
 					out_dict, 

@@ -1,8 +1,12 @@
 module Utils
+#############################################################################
+
+
 
 import LinearAlgebra; const LA = LinearAlgebra
 import SparseArrays; const SpA = SparseArrays
-import Dates
+import Dates, Combinatorics
+
 
 import DelimitedFiles; const DlmF = DelimitedFiles
 import FileIO#,JLD
@@ -10,6 +14,25 @@ import FileIO#,JLD
 using OrderedCollections:OrderedDict
 
 
+
+const List = Union{AbstractVector, AbstractSet, Tuple}
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function DistributeBallsToBoxes(balls::Int, boxes::Int)
+
+	map(Combinatorics.combinations(1:(balls+boxes-1), boxes-1)) do d
+
+		diff(vcat(0, d, balls+boxes)) .- 1
+
+	end
+
+end 
 
 
 
@@ -19,9 +42,108 @@ using OrderedCollections:OrderedDict
 #
 #---------------------------------------------------------------------------#
 
-function Rescale(A, mM0, mM1=A)
+
+function ReplaceByNeighbor!(bad_element::Function, A::AbstractArray, start=CartesianIndex(first.(axes(A))))
 	
+	cart_ind = findnext(bad_element, A, CartesianIndex(start)) 
+
+	isnothing(cart_ind) && return A
+
+
+	for k in 1:maximum([sum(abs, cart_ind.I .- C) for C in [1, size(A)]])
+					# neighbors 
+
+		for J in sort(DistributeBallsToBoxes(k, ndims(A)), by=LA.norm)
+
+			for S in Base.product(fill([1,-1],ndims(A))...)	# Signs
+
+				new_cart_ind = CartesianIndex(cart_ind.I .+ Tuple(S.*J))
+
+				all(1 .<= new_cart_ind.I .<= size(A)) || continue 
+
+				a = A[new_cart_ind]
+
+				bad_element(a) && continue
+
+				A[cart_ind] = a 
+
+				return ReplaceByNeighbor!(bad_element, A, cart_ind)
+
+			end 
+
+		end 
+
+	end 
+				
+	error("The whole array has 'unwanted' elements")
+
+end 
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function multiply_elementwise(A, B, dim=nothing)
+
+
+	any(x -> isa(x,Number), (A,B)) && return A*B
+
+	sA,sB = filter.(!isequal(1), size.((A,B)))
+
+	inds = filter(!isnothing,  indexin(vcat(sA...), vcat(sB...)))
+
+	if length(inds)!=minimum(length,(sA,sB)) || any(diff(inds).<=0)
+
+		error("Shape mismatch")
+	
+	end 
+
+	ndims(A)==ndims(B) && return A.*B
+
+
+	if issubset(sA, sB) # A is smaller than B => expand A
+
+		new_size_A,inds = vcat(size(B)...), vcat(1:ndims(B)...)
+
+		for i in inds 
+
+			!isnothing(dim) && i==dim && continue
+
+			nr = count(new_size_A[i].==sA)
+
+			nr==0 && setindex!(new_size_A, 1, i)
+
+			nr>1 && error("Ambiguous result. Too many occurences found")
+
+		end
+
+		return reshape(A, new_size_A...).*B
+		
+
+	elseif issubset(sB, sA)
+		
+		return multiply_elementwise(B, A)
+
+	end 
+
+	error()
+
+end 
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function Rescale(A, mM0, mM1=A)
+
   m0,M0 = extrema(mM0)
+
+	length(A)==1 && return A-A .+ m0
 
 	m,M = extrema(mM1)
 	
@@ -40,6 +162,18 @@ is_exact(S) = any(Ti -> S<:Ti, [Integer, Rational, AbstractString, AbstractChar,
 
 
 
+function Unique!(V::AbstractArray{T}; sorted=false, kwargs...) where T
+
+	i = Unique(V; kwargs..., sorted=false, inds=:first)[2]
+
+	deleteat!(V, filter(!in(i), axes(V,1)))
+
+	sorted && sort!(V)
+
+end
+
+
+
 function Unique(V::AbstractArray{T}; 
 								tol=1e-8, inds=nothing,
 								sorted=false,
@@ -54,7 +188,7 @@ function Unique(V::AbstractArray{T};
 	
 		isnothing(inds) && return U
 
-		i_f = findfirst(inds.==["first","all","last"])
+		i_f = findfirst(inds.==[:first,:all,:last])
 
 		isnothing(i_f) && error("Cannot get indices with '$inds'")
 
@@ -81,7 +215,7 @@ function Unique(V::AbstractArray{T};
 
 	end
 
-	I = Unique(get_newV(); tol=tol, inds=Assign_Value(inds, "first"),
+	I = Unique(get_newV(); tol=tol, inds=Assign_Value(inds, :first),
 						 						 sorted=sorted, check_type=false)[2]
 
 	isnothing(inds) && return V[I]
@@ -104,6 +238,12 @@ function flatmap(f,itr)
 	vcat(map(f,itr)...)
 
 end
+
+function flatmapif(f, pred, itr)
+
+	vcat(mapif(f, pred, itr)...)
+
+end 
 
 #===========================================================================#
 #
@@ -129,11 +269,14 @@ function zipmap(args...)
 
 end 
 
+
 invmap(arg, fs...) = invmap(arg, fs)
 
-function invmap(arg, fs)
+function invmap(args, fs)
 
-	map(f->f(arg), fs)
+
+
+	map(f->f(args...), fs)
 
 end 
 
@@ -222,6 +365,10 @@ function recursive_cumsum(array::T,start=0) where T
 	return	out
 
 end
+
+
+
+
 
 
 
@@ -363,28 +510,28 @@ end
 
 
 
-function isList(arg::T,Ti=Any) where T
 
-	if T <: Type 
-	
-		arg<:Tuple{Vararg{<:Ti}} && return true 
+function isTuple(arg::T, Ti=Any) where T
 
-		for S in [AbstractVector, AbstractRange, AbstractSet]
+	(T<:Type ? arg : T) <: Tuple{Vararg{<:Ti}}
 
-			arg <: S{<:Ti} && return true 
-
-		end 
-
-		return false 
-
-	else
-
-		return isList(typeof(arg),Ti)
-
-	end
 end
 
-#isList(a::Any,Ti=Any) = isList(typeof(a),Ti)
+
+
+function isList(arg::T, Ti=Any) where T
+
+	isTuple(arg, Ti) && return true 
+
+	for S in [AbstractVector, AbstractSet]
+
+		(T<:Type ? arg : T) <: S{<:Ti} && return true 
+
+	end 
+
+	return false 
+
+end
 
 #===========================================================================#
 #
@@ -422,11 +569,17 @@ BlkDiag(args...) = BlkDiag(args)
 #
 #---------------------------------------------------------------------------#
 
-function flat(list_of_lists...; keep=x->true)
+function flat(list_of_lists...; keep=nothing)
 
 	i = findfirst(isList, list_of_lists)
 
-	isnothing(i) && return filter(keep, vcat(list_of_lists...))
+	if isnothing(i) 
+		
+		isnothing(keep) && return vcat(list_of_lists...)
+		
+		return filter(keep, vcat(list_of_lists...))
+
+	end
 
 	return flat(list_of_lists[1:i-1]..., 
 							list_of_lists[i]..., 
@@ -876,6 +1029,8 @@ function Write_NamesVals(filename, storemethod="jld";
 
 	writable(matrix::AbstractArray{<:Char},name) = matrix
 
+#	writable(matrix::Char, name) = matrix
+
 	writable(x::Number, name) = writable(vcat(x), name) 
 
 	function writable(D::AbstractDict, name) 
@@ -917,13 +1072,10 @@ function Write_NamesVals(filename, storemethod="jld";
   end
 
 
-	function new_item!((name, val), outdict::AbstractDict=Dict())
 
-		new_item!(name, val, outdict)
+	function new_item!(name::AbstractString, val, outdict::AbstractDict=Dict())
 
-	end 	
-
-	function new_item!(name, val, outdict::AbstractDict=Dict())
+#		@show name typeof(val) keys(outdict)
 
 		if !isnothing(name) & !isnothing(val)
 
@@ -935,6 +1087,11 @@ function Write_NamesVals(filename, storemethod="jld";
 
   end
 
+	function new_item!((name, val)::T, outdict::AbstractDict=Dict()) where T<:Tuple{AbstractString,Any}
+
+		new_item!(name, val, outdict)
+
+	end 	
 
   return new_item!,Dict()
 
@@ -1344,10 +1501,23 @@ function ChangeStoreMethod_PhysObs(filename, names, source, dest)
 
 		Write!, = Utils.Write_NamesVals(filename,  dest)
 
+#		@show names vcat(names) source isLegendFile(source).(vcat(names))
+
+
 		for name in filter(!isLegendFile(source), vcat(names))
 
 #			println("\nMoving '$name' from '$source' to '$dest'\n")
 
+#			@show 1,name 
+#			M = Read_PhysObs(filename, name, source)[name]
+#			@show 2,name
+#			M isa AbstractDict && @show keys(M) size.(values(M))
+#			M isa AbstractArray && @show size(M)
+
+#			@show 3,name 
+#			@show typeof(M)
+
+#			Write!(name, M)
 			Write!(name, Read_PhysObs(filename, name, source)[name])
 
 			Delete_NamesVals(filename, name, source)
@@ -2023,58 +2193,51 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function vectors_of_integers(dim::Int64,stop,start=-stop)
+function vectors_of_integers(D::Int64, stop, start=-stop; dim=1, sortby=nothing)
+
+	dim2 = [2,1][dim]
 
 
-#  if dim == 0
-#    return 
-#  end
+	boundaries = zipmap([Assign_Value(start,-stop), stop]) do x
+		
+		isa(x,Int) && return  fill(x,D)
+	
+		Utils.isList(x,Int) || error("Type ",typeof(x)," not supported")
 
-  start = vcat(start); stop=vcat(stop)
+		length(x)>=D && return vcat(x...)[1:D]
 
+		length(x)==1 && return fill(x[1], D)
 
-  if length(start) != dim
-    start = repeat(start,dim)
-  end
-
-  if length(stop) != dim
-    stop  = repeat(stop,dim)
-  end
-
+		error("Wrong dimensions")
+	
+	end 
 
 
-  iter = Iterators.product([a:b for (a,b) in zip(start,stop)]...)
-
-  return collect(transpose(hcat([collect(x) for x in vcat(iter...)]...)))
+	Ls = [1;[f-i+1 for (i,f) in boundaries];1]
 
 
+	out = similar(Array{Int64}, [prod(Ls), D][[dim,dim2]]...)
+
+	
+	for (i,(a,b)) in enumerate(boundaries)
+
+		setindex!(out,
+							repeat(a:b, inner=prod(Ls[i+2:end]), outer=prod(Ls[1:i])),
+							[:,i][dim], [:,i][dim2]
+							)
 
 
-#  function f(stop_::Array{Int64,1},start_::Array{Int64,1})
-#
-#    if length(stop_)==1 & length(start_)==1
-#      return collect(start_[1]:stop_[1])
-#    end
-#
-#
-#    current_level = f(stop_[1:1],start_[1:1])
-#    lower_level = f(stop_[2:length(stop_)],start_[2:length(start_)])
-#
-#    inner = [size(lower_level)[1],1]
-#    outer = [size(current_level)[1],1]
-#
-#    current_level = repeat(current_level,inner=inner)
-#    lower_level = repeat(lower_level,outer=outer)
-#
-#    return hcat(current_level,lower_level)
-#
-#  end
-#
-#  return f(stop,start)
+	end
+
+	!isa(sortby, Function) && return out
+
+	return sortslices(out, dims=dim, by=sortby)
+
+
+
 
 
 end
-#
 
 
 

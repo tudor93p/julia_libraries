@@ -117,7 +117,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function flat_indsvals(i::Int64,j::Int64,v::Matrix,d0::Int64=1)::Matrix
+function flat_indsvals(i::Int64,j::Int64,v::AbstractMatrix,d0::Int64=1)::Matrix
 
   I,J,V = SpA.findnz(SpA.sparse(v))
 
@@ -454,9 +454,11 @@ function Add_Hopping_Terms(d0,hopp_cutoff::Float64=1e-8)
 
     length(hoppings) == 0 && return (ri,rj) -> Zero
 
-    f(ri,rj) = reduce(+,map(h -> h(ri,rj), hoppings))
+#    f(ri,rj) = reduce(+, map(h -> h(ri,rj), hoppings))
 
-    return  Hopping_Term(matrixval(1),Zero,condition,f)
+		f(ri,rj) = mapreduce(h->h(ri,rj), +, hoppings)
+
+    return Hopping_Term(matrixval(1), Zero, condition, f)
 
   end
 
@@ -470,7 +472,7 @@ end
 
 	# ------------ General case, matrix ------------ #
 
-function Hopping_Term(value::Matrix,Zero::Matrix,condition::Function,fun::Function)
+function Hopping_Term(value::AbstractMatrix,Zero::AbstractMatrix,condition::Function,fun::Function)
 
     return function f(ri::AbstractVector,rj::AbstractVector)
 
@@ -482,7 +484,7 @@ end
 
 	# ------------ Constant matrix if condition  ------------ #
 
-function Hopping_Term(value::Matrix,Zero::Matrix,condition::Function,fun::Matrix)
+function Hopping_Term(value::AbstractMatrix,Zero::AbstractMatrix,condition::Function,fun::AbstractMatrix)
 
     return function f(ri::AbstractVector,rj::AbstractVector)
 
@@ -495,7 +497,7 @@ end
 
 	# ------------ Always return the hopping, function ------------ #
 
-function Hopping_Term(value::Matrix,Zero::Matrix,condition::Bool,fun::Function)
+function Hopping_Term(value::AbstractMatrix,Zero::AbstractMatrix,condition::Bool,fun::Function)
 
   return function f(ri::AbstractVector,rj::AbstractVector)
   
@@ -507,7 +509,7 @@ end
 
 	# ------------ Always return the hopping, const ------------ #
 
-function Hopping_Term(value::Matrix,Zero::Matrix,condition::Bool,fun::Matrix)
+function Hopping_Term(value::AbstractMatrix,Zero::AbstractMatrix,condition::Bool,fun::AbstractMatrix)
 
   return function f(ri::AbstractVector,rj::AbstractVector)
   
@@ -520,7 +522,7 @@ end
 	# ------------ Constant hopping, matrix  ------------- #
 
 
-function Hopping_Term(value::Matrix,Zero::Matrix,condition::Function)
+function Hopping_Term(value::AbstractMatrix,Zero::AbstractMatrix,condition::Function)
 
 
   return function f(ri::AbstractVector,rj::AbstractVector)
