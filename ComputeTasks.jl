@@ -259,7 +259,7 @@ function missing_data(task; show_missing=false)
 
 #	nprocs()>1 && Random.shuffle!(allcombs)
 
-	id = isequal(first(workers()))
+	id = show_missing ? isequal(first(workers())) : x->false
 
 	notdonecombs = allcombs[
 													
@@ -267,7 +267,8 @@ function missing_data(task; show_missing=false)
 
 			out = !task.files_exist(c)
 
-			id(myid()) && println(i,"/",length(allcombs)," ",!out)
+
+			id(myid()) && println(i,"/",length(allcombs)," Files ", out ? "don't " : "", "exist")
 
 			return out
 
@@ -655,23 +656,23 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 	end
 					#-----------------#
 
-	function construct_Z(get_obs::AbstractString, P::AbstractDict; kwargs...)
+	function construct_Z(obs::AbstractString, P::AbstractDict; kwargs...)
 		
-		Data = get_data(P; kwargs..., target=get_obs)
+		Data = get_data(P; fromPlot=true, kwargs..., target=obs)
 
-		d1 = Data[1][get_obs]
+		d1 = Data[1][obs]
 
 		if !Utils.is_dict_or_JLDAW(d1) 
 			
-			return merge!(construct_Z(D->D[get_obs], Data),
-																			 Dict(zname*"label" => get_obs))
+			return merge!(construct_Z(D->D[obs], Data),
+																			 Dict(zname*"label" => obs))
 		end
 
 
 		sub_obs = choose_obs_i(d1; P=P, f="first")[1]
 
 		return merge!(construct_Z(D->choose_obs_i(D[obs]; k=sub_obs)[2], Data),
-									Dict(zname*"label" => "$get_obs $sub_obs"),)
+									Dict(zname*"label" => "$obs $sub_obs"),)
 
 	end 
 
@@ -680,7 +681,7 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 	function construct_Z(get_obs::Function, P::AbstractDict, label::T=nothing; 
 											 kwargs...) where T<:Union{Nothing,AbstractString}
 		
-		construct_Z(get_data, get_data(P; kwargs...), label)
+		construct_Z(get_obs, get_data(P; fromPlot=true, kwargs...), label)
 
 	end 
 
@@ -689,8 +690,9 @@ function init_multitask(M, internal_keys_, ext_par=[]; kwargs...)
 	function construct_Z(get_obs::Function, Data::AbstractVector, 
 											 label::T=nothing) where T<:Union{Nothing,AbstractString}
 
-		out = Dict(zname => zeros(fillvals(length.(allparams), 
-																			 length.(external_param))...))
+		out = Dict{AbstractString,Any}(
+							zname => zeros(fillvals(length.(allparams),
+																			length.(external_param))...))
 
 		if isa(label,AbstractString) && !isempty(label)
 

@@ -15,7 +15,7 @@ using OrderedCollections:OrderedDict
 
 
 
-const List = Union{AbstractVector, AbstractSet, Tuple}
+const List = Union{AbstractVector, AbstractSet, Tuple, Base.Generator}
 
 #===========================================================================#
 #
@@ -26,6 +26,8 @@ const List = Union{AbstractVector, AbstractSet, Tuple}
 
 function DistributeBallsToBoxes(balls::Int, boxes::Int)
 
+	balls<0 && return -DistributeBallsToBoxes(-balls, boxes)
+
 	map(Combinatorics.combinations(1:(balls+boxes-1), boxes-1)) do d
 
 		diff(vcat(0, d, balls+boxes)) .- 1
@@ -34,6 +36,25 @@ function DistributeBallsToBoxes(balls::Int, boxes::Int)
 
 end 
 
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function Zip(Args...) # zip for args of different lengths 
+
+	map(1:maximum(length, Args)) do i
+
+		[A[min(i,end)] for A in Args]
+
+	end 
+
+
+end 
 
 
 #===========================================================================#
@@ -85,10 +106,13 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function multiply_elementwise(A, B, dim=nothing)
+multiply_elementwise(A::Number, B::AbstractArray)::Array = A*B
+multiply_elementwise(A::AbstractArray, B::Number)::Array = A*B
+multiply_elementwise(A::Number, B::Number)::Number = A*B
 
+function multiply_elementwise(A::AbstractArray, B::AbstractArray, dim=nothing)::Array
 
-	any(x -> isa(x,Number), (A,B)) && return A*B
+	size(A)==size(B) && return A.*B
 
 	sA,sB = filter.(!isequal(1), size.((A,B)))
 
@@ -269,6 +293,40 @@ function zipmap(args...)
 
 end 
 
+function Zipmap(args...)
+
+	Zip(map(args...)...)
+
+end 
+
+function filterzip(f, itr)
+
+	filter(f, zip(itr...))
+
+end 
+
+#function zipifmap(args...)
+#
+#	zip(mapif(args...)...)
+#
+#end 
+#
+#
+#function ifmapzip(f, pred, tr)
+#
+#	filter(pred, map(f, zip(itr)))
+#
+#end 
+#
+#function ifzipmap(f::Function, pred::Function, itr)
+#	
+#	filter(pred, zip(map(f,itr)...))
+#
+#end
+
+
+
+
 
 invmap(arg, fs...) = invmap(arg, fs)
 
@@ -289,6 +347,12 @@ end
 #				(each row in inds represents a catesian index)
 #
 #---------------------------------------------------------------------------#
+
+function Array_from_ListIndsVals(inds::AbstractVector, vals)
+
+	Array_from_ListIndsVals(reshape(inds,:,1), vals)
+
+end 
 
 function Array_from_ListIndsVals(inds::AbstractMatrix, vals)
 
@@ -513,7 +577,27 @@ end
 
 function isTuple(arg::T, Ti=Any) where T
 
-	(T<:Type ? arg : T) <: Tuple{Vararg{<:Ti}}
+	if T<:Type 
+
+		arg <: Tuple{Vararg{<:Ti}} && return true 
+
+	elseif T<:Tuple{Vararg{<:Ti}}
+		
+		return true 
+
+	elseif T<:Tuple 
+
+		for a in arg 
+
+			typeof(a)<:Ti || return false 
+			
+		end 
+
+		return true 
+
+	end 
+
+	return false 
 
 end
 
@@ -521,17 +605,42 @@ end
 
 function isList(arg::T, Ti=Any) where T
 
-	isTuple(arg, Ti) && return true 
-
 	for S in [AbstractVector, AbstractSet]
 
-		(T<:Type ? arg : T) <: S{<:Ti} && return true 
+		if T<:Type 
+			
+			arg<:S{<:Ti} && return true 
+
+		elseif T<:S{<:Ti}
+
+			return true 
+
+		elseif T<:S 
+
+			for a in arg 
+
+				typeof(a)<:Ti || return false 
+				
+			end 
+
+			return true 
+
+		end 
 
 	end 
 
-	return false 
+
+	return isTuple((typeof(arg) <: Base.Generator) ? Tuple(arg) : arg, Ti)
 
 end
+
+
+function isList(;T=Any)
+
+	arg -> isList(arg, T)
+	
+end 
+
 
 #===========================================================================#
 #
@@ -780,25 +889,34 @@ end
 
 function Distribute_Work(allparamcombs,do_work;arg_pos=1,kwargs0...)
 
+  nr_scripts = min(length(allparamcombs), get_arg(1, arg_pos, Int64))
 
-  nr_scripts, idproc = get_arg.(1,arg_pos .+ (0:1) ,Int64)
+	start =  get_arg(1, arg_pos+1, Int64)
 
-  nr_scripts = min(length(allparamcombs),nr_scripts)
+	idproc = gethostname()
 
-  if idproc > nr_scripts
+	if start > nr_scripts
+
     println(string("\nI am ",idproc," and I am not doing any jobs (nr.jobs < nr.processes).\n"))
     return
 
   end
+
+	stop = min(nr_scripts, get_arg(start, arg_pos+2, Int64))
+
+
   
-  doparams, which_, njobs = distribute_list(allparamcombs,nr_scripts,idproc)
+  doparams, which_, njobs = distribute_list(allparamcombs, nr_scripts, 
+																						start, stop)
   
-  println(string("\nI am ",idproc,"/",nr_scripts," and I am doing jobs ",which_," out of ",njobs,".\n"))
+#  println("\nI am $idproc/$nr_scripts and I am doing jobs $which_ out of $njobs.\n")
+  println("\nI am $idproc and I am doing jobs $which_ out of $njobs.\n")
 
 
   function print_progress(ip,t1)
 
-		println(string("\nI am ",idproc,"/",nr_scripts," and I completed ",ip,"/",length(which_)," jobs (last one: ",which_[ip],"/",which_," in ", Int(round(Dates.value(Dates.now()-t1)/1000)),"s)."))
+#		println(string("\nI am ",idproc,"/",nr_scripts," and I completed ",ip,"/",length(which_)," jobs (last one: ",which_[ip],"/",which_," in ", Int(round(Dates.value(Dates.now()-t1)/1000)),"s)."))
+		println(string("\nI am $idproc and I completed $ip/",length(which_)," jobs (last one: ",which_[ip],"/$which_ in ", Int(round(Dates.value(Dates.now()-t1)/1000)),"s)."))
 
 #    println(strout)
 
@@ -889,7 +1007,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Write_NamesVals(filename,  storemethod, names, result, bounds; tol=1e-7, filemethod="new")
+function Write_NamesVals(filename,  storemethod, Names, result, bounds; tol=1e-7, filemethod="new")
 
 
 	Write!, outdict = Write_NamesVals(filename, storemethod;
@@ -897,7 +1015,7 @@ function Write_NamesVals(filename,  storemethod, names, result, bounds; tol=1e-7
 																		tol=tol)
 
 
-  for (i,name) in enumerate(names)
+  for (i,name) in enumerate(Names)
 
  		Write!(name, result[:,bounds[i]+1:bounds[i+1]], outdict)
 
@@ -1100,13 +1218,13 @@ end
 
 
 
-function Delete_NamesVals(filename, names, storemethod)
+function Delete_NamesVals(filename, Names, storemethod)
 
 	ext = Extension_Storemethod(storemethod)
 
 	get_legend = LegendFile_fromName(storemethod)
 
-	Ns = isa(names,AbstractString) ? [names] : names
+	Ns = isa(Names,AbstractString) ? [Names] : Names
 
 #	println("\nDelete ",join(Ns,", "),"\n")
 
@@ -1123,16 +1241,16 @@ end
 
 
 
-function Read_NamesVals(filename, names, storemethod)
+function Read_NamesVals(filename, Names, storemethod)
 	
-	names = isa(names,AbstractString) ? [names] : names
+	Names = isa(Names,AbstractString) ? [Names] : Names
 
-	filenames = unique(filename.(names).*Extension_Storemethod(storemethod))
+	fileNames = unique(filename.(Names).*Extension_Storemethod(storemethod))
 
 
 	if storemethod=="jld"
 
-		FNs = filter(isfile, filenames)
+		FNs = filter(isfile, fileNames)
 
 		isempty(FNs) && return Dict()
 
@@ -1146,7 +1264,7 @@ function Read_NamesVals(filename, names, storemethod)
 
 	  outdict = Dict()
 	
-		for (n,fn) in zip(names,filenames)
+		for (n,fn) in zip(Names,fileNames)
 
 			if isfile(fn)
 
@@ -1175,7 +1293,7 @@ function is_dict_or_JLDAW(D)
 
 	D isa AbstractDict && return true 
 
-	all(in(propertynames(D)), [:keys, :values]) && return true
+	all(in(propertyNames(D)), [:keys, :values]) && return true
 
 	return false 
 
@@ -1191,9 +1309,9 @@ end
 #---------------------------------------------------------------------------#
 
 
-function FoundFiles_NamesVals(filename, names, storemethod)
+function FoundFiles_NamesVals(filename, Names, storemethod)
 	
-	fn = filename.(vcat(names)).*Extension_Storemethod(storemethod)
+	fn = filename.(vcat(Names)).*Extension_Storemethod(storemethod)
 
 	return all(isfile, unique(fn))
 
@@ -1450,11 +1568,11 @@ end
 FoundFiles_PhysObs = FoundFiles_NamesVals
 
 
-function Read_PhysObs(filename, names, storemethod)
+function Read_PhysObs(filename, Names, storemethod)
 
 	if storemethod=="jld"
 
-		return Read_NamesVals(filename, names, storemethod)
+		return Read_NamesVals(filename, Names, storemethod)
 
 	elseif storemethod=="dat"
 
@@ -1462,7 +1580,7 @@ function Read_PhysObs(filename, names, storemethod)
 
 		obsf = Name_fromLegend(storemethod)
 
-		out = Read_NamesVals(filename, [names; legf.(vcat(names))], storemethod)
+		out = Read_NamesVals(filename, [Names; legf.(vcat(Names))], storemethod)
 													
 		for legend in filter(isLegendFile(storemethod), keys(out))
 
@@ -1494,17 +1612,18 @@ end
 
 
 
-function ChangeStoreMethod_PhysObs(filename, names, source, dest)
+function ChangeStoreMethod_PhysObs(filename, Names, source, dest;
+																	delete=true)
 
 
 	if source!=dest 
 
 		Write!, = Utils.Write_NamesVals(filename,  dest)
 
-#		@show names vcat(names) source isLegendFile(source).(vcat(names))
+#		@show Names vcat(Names) source isLegendFile(source).(vcat(Names))
 
 
-		for name in filter(!isLegendFile(source), vcat(names))
+		for name in filter(!isLegendFile(source), vcat(Names))
 
 #			println("\nMoving '$name' from '$source' to '$dest'\n")
 
@@ -1520,13 +1639,13 @@ function ChangeStoreMethod_PhysObs(filename, names, source, dest)
 #			Write!(name, M)
 			Write!(name, Read_PhysObs(filename, name, source)[name])
 
-			Delete_NamesVals(filename, name, source)
+			delete && Delete_NamesVals(filename, name, source)
 
 		end 
 
 	end
 
-	return FoundFiles_PhysObs(filename, names, dest)
+	return FoundFiles_PhysObs(filename, Names, dest)
 
 #	return true # if succesful, files exist 
 
@@ -1682,7 +1801,7 @@ function execute_julia_function(args,nr_results,read_write_funs,file_function;Nr
   f_args = write_args(args...)
 
 
-		# make up some filenames for the results
+		# make up some fileNames for the results
   f_result = "./aux/res_"*join(file_function).*string.(rand(20000:30000) .+ collect(1:nr_results) )
 
 		# make a separate script and run the function in parallel 
@@ -1700,14 +1819,14 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function distribute_list(list,n,i)
+function distribute_list(list,n,i,j=i)
 
   nitems = size(list,1)
 
   inds  = cumsum([0;div(nitems,n) .+ (1:n.<=nitems%n)])
 
 
-  which_ = inds[i]+1:inds[i+1]
+  which_ = inds[i]+1:inds[j+1]
 
 
   return list[which_], which_, nitems
@@ -1947,11 +2066,11 @@ end
 ##  println.(inds)
 #
 #
-##  if !isnothing(names) & !isnothing(files_exist)
+##  if !isnothing(Names) & !isnothing(files_exist)
 #
 #
 ##
-##    names = .Assign_Value(names,string.(["Parameter "],1:size(params,1)))
+##    Names = .Assign_Value(Names,string.(["Parameter "],1:size(params,1)))
 ##   
 ##   
 ##  
@@ -1976,7 +2095,7 @@ end
 ##  
 ##
 ##  
-##  for (name,param,column) in zip(names,params,eachcol(inds))
+##  for (name,param,column) in zip(Names,params,eachcol(inds))
 ##  
 ##    for u in unique(column)
 ##  
@@ -2202,7 +2321,7 @@ function vectors_of_integers(D::Int64, stop, start=-stop; dim=1, sortby=nothing)
 		
 		isa(x,Int) && return  fill(x,D)
 	
-		Utils.isList(x,Int) || error("Type ",typeof(x)," not supported")
+		isList(x,Int) || error("Type ",typeof(x)," not supported")
 
 		length(x)>=D && return vcat(x...)[1:D]
 

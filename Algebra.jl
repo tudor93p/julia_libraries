@@ -374,51 +374,15 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function get_CombinedDistribution(args::Vararg{Any,3}; kwargs...)
-
-	unpack(x) = (typeof(x) <: Base.Generator) ? Tuple(x) : x
-
-	return get_CombinedDistribution_(unpack.(args)...; kwargs...)
-
-end 
-
-function get_CombinedDistribution_(values, centers, delta;
-																	weights = "Lorentzian",
-																	normalize=true, get_norm=false)
-
-
-	choose(A, i=1) = typeof(A)<:Tuple ? A[min(i,end)] : A
-
-	len(A) = typeof(A)<:Tuple ? length(A) : 1
-
-	imax = maximum(len.((weights, values, centers, delta)))
-
-	function get_w(i=1; kwargs...)
-
-		get_Distribution(choose(weights, i); kwargs...)(
-								choose(values, i), choose(centers, i), choose(delta, i))
-	end
-
-	imax==1 && return get_w(;normalize=normalize, get_norm=get_norm)
-
-	w = mapreduce(i->get_w(i; normalize=false), (w1,w2)->w1.*w2, 1:imax)
-
-	N = 1e-20 .+ sum(w, dims=2)
-
-	return normalize ? w./N : w |> W -> get_norm ? (W,N) : W
-
-end
-
-
-
-
-function ConvoluteVectorPacket(values, centers, 
+function ConvoluteVectorPacket(weights, values, centers, 
 															 delta, vectors::AbstractMatrix;
-															 weights="Lorentzian", get_weights=false) 
+															 get_weights=false) 
 
-	W = get_CombinedDistribution(values, centers, delta; weights=weights) 
+	W = getCombinedDistrib(weights, values, centers, delta)
 
-	return W*vectors[axes(W,2),:] |> v -> get_weights ? (v,W) : v
+	v = view(vectors,axes(W,2),:) 
+
+	return get_weights ? (W*v,W) : W*v
 
 end
 
@@ -703,69 +667,321 @@ end
 
 
 
+
+function diff_vc(v::Tv, c::Tc) where {Tv,Tc}
+
+	all(T->T<:AbstractArray,(Tv,Tc)) && return reshape(c,1,:) .- reshape(v,:,1)
+
+	return c .- v
+
+	error()
+
+end 
+
+
+
+
+
+
 #===========================================================================#
 #
-# Lorentzian, Gaussian functions
+#
+#
+#---------------------------------------------------------------------------#
+
+struct myDistrib
+
+	F::Function 
+
+	function myDistrib(f::Function; normalize=false) 
+	
+		hasmethod(f, (Real, Real)) || error("Wrong input function")
+	
+		g(x::Real, w::Real)::Real = f(x,w)
+	
+		g(v::Real, c::Real, w::Real)::Real = f(c-v, w)
+	
+		g(x::AbstractArray, w::Real)::Array = f.(x,w)
+	
+		g(v::AbstractArray, c::Real, w::Real)::Array = f.(c.-v, w)
+	
+		g(v::Real, c::AbstractArray, w::Real)::Array = f.(c.-v, w)
+	
+		g(v::AbstractVector, c::AbstractVector, w::Real)::Matrix = f.(reshape(c,1,:) .- reshape(v,:,1), w)
+	
+	
+		function g(w::Real)::Function 
+			
+			h(x::Real)::Real = f(x,w)	
+	
+			h(v::Real, c::Real)::Real = f(c-v, w)
+	
+			h(x::AbstractArray)::Array = f.(x,w)
+	
+			h(v::AbstractArray, c::Real)::Array = f.(c.-v, w)	
+	
+			h(v::Real, c::AbstractArray)::Array = f.(c.-v, w)
+	
+			h(v::AbstractVector, c::AbstractVector)::Matrix = f.(reshape(c,1,:) .- reshape(v,:,1), w)	
+	
+	
+			return h 
+	
+		end 
+
+#		g(a::Tuple) = g(a...)
+	
+		return new(g)
+#	return g
+	
+	end 
+	
+	
+	function myDistrib(str::String; kwargs...)
+	
+		E = Meta.parse(str); 
+		
+		return myDistrib(@eval (x::Real, w::Real) -> $(E); kwargs...)
+	
+	end 
+
+
+end 
+# f = @eval ... ;return myDistrib(f)
+#  Remembers only the last f and overwrites the previous ones
+#
+# myDistrib(@eval ...) might create strange "var is not defined" errors
+
+
+#===========================================================================#
+#
+#
 #
 #---------------------------------------------------------------------------#
 
 
-function Gaussian(value,centers,width)
+normDistrib(W::Real)::Real = W 
+normDistrib(W::AbstractVector)::Real = sum(W) + 1e-20
+normDistrib(W::AbstractMatrix)::Matrix = sum(W, dims=2) .+ 1e-20
 
-  exp.(-abs2.(reshape(centers,1,:) .- value)/width^2)/(width*sqrt(pi))
+normDistrib(F::Function)::Function = normDistrib ∘ F
+normDistrib(D::myDistrib)::Function = normDistrib(D.F)
+
+
+normalizeDistrib(W::Real, N::Union{Float64,Int64})::Real = W/N 
+normalizeDistrib(W::AbstractVector, N::Union{Int64,Float64})::Vector = W/N 
+normalizeDistrib(W::AbstractMatrix, N::AbstractMatrix)::Matrix = W./N 
+
+
+function normalizeDistrib(W::Tw, N::Tn, n::Bool) where Tw<:T where Tn<:T where T<:Union{Real, AbstractVecOrMat}
+
+	n ? normalizeDistrib(W, N) : W 
+
+end 
+
+
+function normalizeDistrib(W::T) where T<:Union{Real, AbstractVecOrMat}
+
+	normalizeDistrib(W, normDistrib(W))
+
+end 
+
+
+function normalizeDistrib(W::T, n::Bool) where T<:Union{<:Real, <:AbstractVecOrMat}
+
+	n ? normalizeDistrib(W) : W 
+
+end 
+
+
+normalizeDistrib(F::Function)::Function = normalizeDistrib ∘ F 
+normalizeDistrib(F::Function, n::Bool)::Function = n ? normalizeDistrib(F) : F
+
+normalizeDistrib(D::myDistrib)::Function = normalizeDistrib(D.F) 
+normalizeDistrib(D::myDistrib, n::Bool)::Function = normalizeDistrib(D.F, n)
+
+
+
+
+
+function normalizedDistribAndNorm(W::Union{Real, AbstractVecOrMat}, n::Bool=true)::Tuple
+
+	N = normDistrib(W) 
+
+	return (normalizeDistrib(W, N, n), N)
+
+end 
+
+
+function normalizedDistribAndNorm(F::Function, n::Bool=true)::Function 
+
+	FN(args...) = normalizedDistribAndNorm(F(args...), n)
+
+end 
+
+function normalizedDistribAndNorm(D::myDistrib, n::Bool=true)::Function 
+
+	normalizedDistribAndNorm(D.F, n)
+
+end 
+
+
+
+
+
+function (D::myDistrib)(args...; normalize::Bool=false) 
+
+	normalizeDistrib(D.F(args...), normalize)
+
+end 
+
+#===========================================================================#
+#
+# Lorentzian, Gaussian functions etc
+#
+#---------------------------------------------------------------------------#
+
+
+Lorentzian = myDistrib("w / (x^2 + w^2) / pi")
+
+Gaussian = myDistrib("exp(-x^2/w^2)/(w*sqrt(pi))")
+
+Heaviside = myDistrib("Float64(x>=w)")
+
+Rectangle = myDistrib("Float64(-w/2<=x<=w/2)")
+
+
+#w=rand()+0.1;x=rand(100,100);
+#@show LA.norm(Gaussian(x,w) - Lorentzian(x,w))
+#
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function getDistrib(args::Tuple; kwargs...)#::Function
+
+	getDistrib(args...; kwargs...)
+
+end 
+
+function getDistrib(name::String, args...; kwargs...)#::Function
+	
+	getDistrib(Symbol(name), args...; kwargs)
+
+end 
+
+function getDistrib(F::Function; normalize=false)::Function
+	
+	normalizeDistrib(F, normalize)
 
 end
 
-function Lorentzian(value,centers,delta)
+function getDistrib(name::Symbol, args...; kwargs...) 
 
-  1/pi*delta./(abs2.(reshape(centers,1,:) .- value) .+ delta^2)
+	getDistrib(getproperty(@__MODULE__, name), args...; kwargs...)
+	
+end 
+
+
+function getDistrib(F::Function, args...; normalize=false) 
+	
+	normalizeDistrib(F(args...), normalize)
+
+end 
+
+function getDistrib(D::myDistrib, args...; kwargs...)
+	
+	getDistrib(D.F, args...; kwargs...)
+
+end 
+
+
+
+
+
+
+function getDistribAndNorm(args...; kwargs...)
+
+	normalizedDistribAndNorm(getDistrib(args...; normalize=false);
+													 kwargs...)
+
+end 
+
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function getCombinedDistrib(args; normalize=false) 
+
+	length(args)==1 && return getDistrib(args[1]...; normalize=normalize)
+
+	D(a) = getDistrib(a..., normalize=false)
+
+	D1 = D(args[1]) # may be a function or numeric
+
+
+	if typeof(D1)<:Union{Real,AbstractArray}
+
+		return normalizeDistrib(
+							mapreduce(D, Utils.multiply_elementwise, args[2:end], init=D1),
+							normalize)
+
+
+	elseif D1 isa Function 
+
+		Ds = [D1; D.(args[2:end])]
+
+		totalD(Args...) = mapreduce(d->d(Args...), Utils.multiply_elementwise, Ds)
+
+		return normalizeDistrib(totalD, normalize) 
+
+	else 
+
+		error("Wrong D1")
+
+	end 
+
+end 
+
+
+function getCombinedDistribAndNorm(args; normalize=false)
+
+	normalizedDistribAndNorm(getCombinedDistrib(args, normalize=false), 
+													 normalize)
+
+end 
+
+
+#	If length('args')>1, the quantities must be given in the proper order. 
+#	Either of:
+#				names, deltas 
+#				names, values, deltas 
+#				names, values, centers, deltas 
+
+
+mktuple(a) = isa(a,Tuple) ? a : tuple(a)
+
+function getCombinedDistrib(args...; kwargs...)
+
+	getCombinedDistrib(Utils.Zipmap(mktuple, args); kwargs...)
 
 end
 
-function Heaviside(value,centers,delta=0.0)
 
- 1.0*((reshape(centers,1,:) .- value) .<= delta)
+function getCombinedDistribAndNorm(args...; kwargs...)
+	
+	getCombinedDistribAndNorm(Utils.Zipmap(mktuple, args); kwargs...)
 
-end
-
-
-function Rectangle(value,centers,delta)
-
-  Heaviside(-value,-centers,delta/2) .* Heaviside(value,centers,delta/2) 
-  
-#  return (-delta/2 .<= (reshape(centers,1,:) .- value) .<= delta/2)
-
-end
-
-
- 
-
-function get_Distribution(name; normalize=true, get_norm=false)
-
-  options = ["Lorentzian", "Gaussian","Rectangle"]
-
-  functions = [Lorentzian,Gaussian,Rectangle]
-
-  name in options || error("Please choose: "*join(options,", "))
-
-  f = functions[findfirst(name .== options)]
-
-	!normalize && !get_norm && return f
-
-
-	fnormf(args...) = f(args...) |> fa -> (fa, 1e-20 .+ sum(fa,dims=2) )
-
-
-	!normalize && get_norm && return fnormf
-
-	!get_norm && return (args...) -> fnormf(args...) |> fn -> fn[1]./fn[2]
-
-	return (args...) -> fnormf(args...) |> fn -> (fn[1]./fn[2],fn[2])
-
-
-end
-
- 
+end 
 
 
 

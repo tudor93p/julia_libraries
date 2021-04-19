@@ -1,116 +1,58 @@
 using OrderedCollections:OrderedDict
 include("../Lattices.jl")
 
-import Algebra, Utils
+import Algebra, Utils, Plots
 
 
 println()
 
-#Lattices.Lattice(rand(3,3), Dict("A"=>rand(3,2),"B"=>rand(3)))
+#L = Lattices.Lattice(sqrt(3)*1*[[cos(2π/12),sin(2π/12)] [cos(2π/12),-sin(2π/12)]], ["A"=> [0,0], "B" => [1/3,1/3]], mode=:fractional)
 
-#Lattices.Lattice(rand(3,3),OrderedDict("A"=>rand(3,2),"B"=>rand(3,1)))
-
-#L = Lattices.Lattice([[sqrt(3) sqrt(3)];[1 -1]]/2, ["B"=>[0,0],"A"=>[1/3,1/3]], mode=:fractional)
-
-L = Lattices.Lattice(sqrt(3)*1*[[cos(2π/12),sin(2π/12)] [cos(2π/12),-sin(2π/12)]], ["A"=> [0,0], "B" => [1/3,1/3]], mode=:fractional)
-
-#a = Algebra.OuterBinary(unique(["1","1","2"]),string.(keys(L.Sublattices)),occursin)
-
-
-
-#Lattices.PosAtoms(L)
-
-
-#@show Lattices.Distances(L)
-
-0
-
-
-v = rand(2,2)
-
-
-b1 = Lattices.BodyVertices_fromVectors(v, dim=1)
-b2 = Lattices.BodyVertices_fromVectors(transpose(v), dim=2)
-
-#b1 |> eachrow .|> println
 
 println()
 
-#b2 |> eachcol .|> println
 
 
-
-
-#@show extrema(b1,dims=1)
-#@show extrema(b2,dims=2)
-
-
-
-
-#@show b1 .- transpose(b2)
-
-
-#@show Lattices.ucs_in_UC([4,4])
-
-
-
-@show Lattices.Superlattice(L,[1,2]) |> Lattices.AddAtoms! |> Lattices.AddAtoms!
-
-println()
-
-@show Lattices.Superlattice([L,L],[1,1])
-
-
-@show L 
-println()
-println()
-
+L = Lattices.Lattice(Utils.UnitMatrix(2))
 
 Lattices.AddAtoms!(L)
 
-@show L 
-
-println()
-
-L = Lattices.Lattice(rand(2,2))
-
-println()
+Lattices.Superlattice!(L, [5,3])
 
 
-@show L
 
 
-println()
+
+#@show L
 
 
-Lattices.AddAtoms!(L)
+#Lattices.PosAtoms(Lattices.Superlattice(Lattices.Lattice(Utils.UnitMatrix(2))|>Lattices.AddAtoms, [10,10])).-Lattices.PosAtoms(L) .|> abs|> maximum |> println
 
 
-@show L
-
-#Lattices.AddAtoms!(L,rand(2))
+#Lattices.ReduceDim!(L)
 
 
-println()
+#@show L
 
-Lattices.ShiftAtoms!(L, n=1)
-
-
-@show L 
-
-println()
+L1 = L
 
 
-println()
+
+L2 = Utils.UnitMatrix(2) |> Lattices.Lattice |> Lattices.AddAtoms 
+
+Lattices.ShiftAtoms!(L2, n=[0,1.6])
+
+Lattices.Superlattice!(L2, (2,5))
 
 
-println()
+Lattices.ReduceDim!(L2, 2)
 
 
-println()
 
 
-println()
+Lattices.Align_toAtoms(L2, Lattices.PosAtoms(L1))
+
+Lattices.plot(L2,L1)
 
 
 
@@ -131,21 +73,6 @@ println()
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-nothing
 
 
 

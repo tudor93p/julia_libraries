@@ -6,6 +6,8 @@ using OrderedCollections:OrderedDict
 import LinearAlgebra; const LA=LinearAlgebra
 import Utils, Algebra
 
+import Plots, ConcaveHull, QHull
+
 
 
 
@@ -44,94 +46,6 @@ const TOLERANCE = 1e-5
 
 
 
-to_myMatrix(x::Real)::AbstractMatrix{Float64} = fill(x, 1, 1)
-to_myMatrix(x::Nothing)::AbstractMatrix{Float64} = fill(0.0, 1,1)
-
-
-function to_myMatrix(x::AbstractMatrix)::AbstractMatrix{Float64} 
-
-	x
-
-end 
-
-function to_myMatrix(x::Utils.List)::AbstractMatrix{Float64}
-
-	length(x)==0 && return zeros(Float64, 0, 0)
-
-	if all(Utils.isList, x)
-	
-		out = zeros(Float64, length(x[1]), length(x))
-	
-		for (j,xj) in enumerate(x) # each column j is a vector
-
-			out[:,j] = collect(xj)
-
-		end 
-
-		return out 
-
-	end 
-
-	all(isreal, x) && return reshape(collect(x),:,1)
-
-
-end 
-
-
-function to_myODict(x::Nothing)::OrderedDict{Any, AbstractMatrix{Float64}}
-
-	OrderedDict()
-
-end
-
-
-function to_myODict(x::AbstractDict)::OrderedDict{Any, AbstractMatrix{Float64}}
-
-	if x isa OrderedDict 
-
-		valtype(x)==AbstractMatrix{Float64} && return x
-
-		return OrderedDict(k=>to_myMatrix(v) for (k,v) in x)
-
-	end 
-
-	return OrderedDict(map(sort(collect(keys(x)), by=string)) do k
-
-									 k => to_myMatrix(x[k])
-
-								 end)
-
-end 
-
-
-function to_myODict(x::Utils.List)::OrderedDict{Any, AbstractMatrix{Float64}}
-
-	isempty(x) && return OrderedDict()
-
-	all(isa.(x,Pair)) && return OrderedDict(k=>to_myMatrix(v) for (k,v) in x)
-
-	return OrderedDict("A"=>to_myMatrix(x))
-
-end
-
-function to_myODict(x::AbstractMatrix)::OrderedDict{Any, AbstractMatrix{Float64}}
-
-	OrderedDict("A"=>to_myMatrix(x))
-
-end
-
-
-
-function to_myODict(x::Pair)::OrderedDict{Any, AbstractMatrix{Float64}}
-
-	OrderedDict(x.first => to_myMatrix(x.second))
-
-end
-
-
-to_myODict(x...)::OrderedDict{Any, AbstractMatrix{Float64}} = to_myODict(x)
-
-
 
 
 
@@ -152,17 +66,16 @@ to_myODict(x...)::OrderedDict{Any, AbstractMatrix{Float64}} = to_myODict(x)
 
 												
 
-function CombsOfVecs(A::AbstractMatrix{<:T}, coeff::AbstractMatrix{<:V}; dim=2)::AbstractMatrix{promote_type(T,V)} where T where V
-
-	dim==2 && return A*coeff
-
-	dim==1 && return coeff*A
-
-	error()
-
-end
 
 
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+Base.copy(s::Symbol) = s
+Base.copy(s::String) = s
 
 #===========================================================================#
 #
@@ -213,7 +126,64 @@ mutable struct Lattice
 		return new(lv,sl,va)
 
 	end 
+
+	function Lattice(latt::Lattice; act_on_vectors=(v::AbstractMatrix)->v,
+									 								act_on_atoms=(d::AbstractDict)->d
+																								)
+		Lattice(
 	
+			collect( 
+
+				if hasmethod(act_on_vectors, (AbstractMatrix,))
+
+					act_on_vectors(copy(latt.LattVec))
+
+				elseif hasmethod(act_on_vectors, (Lattice,))
+
+					act_on_vectors(latt)
+
+				else
+
+					error("Improper definiton of 'act_on_vectors'")
+
+				end
+
+						),
+
+		
+			map([:Sublattices, :Vacancies]) do kind
+	
+				D = getproperty(latt, kind)
+
+				for args in ((D,), (kind,), (), (kind, D),)
+
+					!hasmethod(act_on_atoms, typeof.(args)) && continue 
+			
+					return act_on_atoms(map(copy, args)...)
+
+				end 
+
+	
+				return map(collect(keys(D))) do k 
+
+					for args in ((D[k], k), (kind, D[k], k), (kind, D[k]))
+
+						!hasmethod(act_on_atoms, typeof.(args)) && continue 
+
+						return act_on_atoms(map(copy, args)...)
+
+					end 
+
+					error("Improper methods of 'act_on_atoms'")
+
+				end 
+
+			end...)
+	
+	
+	end 
+	
+		
 end 
 
 
@@ -223,21 +193,193 @@ end
 #
 #---------------------------------------------------------------------------#
 
+function to_myMatrix(x::Nothing, D::Union{Int64,Nothing}
+	)::AbstractMatrix{Float64}
+
+	EmptyPos(D)
+
+end 
 
 
-function CombsOfVecs(latt::Lattice, coeff::AbstractMatrix{<:Real}; kwargs...)::AbstractMatrix{Float64}
+function to_myMatrix(x::Real, D::Union{Int64,Nothing}
+										)::AbstractMatrix{Float64} 
 
-	CombsOfVecs(latt.LattVec, coeff; kwargs...)
+	fill(x, Utils.Assign_Value(D, 1), 1)
+
+end 
+
+
+
+function to_myMatrix(x::AbstractMatrix, D::Union{Int64,Nothing}=nothing
+										)::AbstractMatrix{Float64}
+
+	(isnothing(D) || size(x,1)==D) && return x
+
+	error("Wrong array dimension")
+	
+end 
+
+
+function to_myMatrix(x::Utils.List, D::Union{Int64,Nothing}=nothing
+										)::AbstractMatrix{Float64}
+
+	isempty(x) && return EmptyPos(D) 
+
+
+	if Utils.isList(x, Real) && (isnothing(D) || length(x)==D)
+
+			return reshape(collect(x),:,1)
+
+	elseif all(Utils.isList(;T=Real), x) && (
+					 isnothing(D) || all(D.==length.(x)))
+
+		out = zeros(Float64, length(x[1]), length(x))
+	
+		for (j,xj) in enumerate(x) # each column j is a vector
+
+			out[:,j] = collect(xj)
+
+		end 
+
+		return out 
+
+	end 
+
+	error("Wrong dimensions or types")
+
+end 
+
+
+function to_myMatrix(x, latt::Lattice)::AbstractMatrix{Float64}
+
+	to_myMatrix(x, VecDim(latt))
+	
+end 
+
+function to_myMatrix(x, A::AbstractMatrix)::AbstractMatrix{Float64}
+
+	to_myMatrix(x, size(A,1))
+	
+end 
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+function to_myODict(x::Nothing, D::Union{Int64,Nothing}=nothing
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	OrderedDict()
+
+end
+
+
+function to_myODict(x::AbstractDict, D::Union{Int64,Nothing}=nothing
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	if x isa OrderedDict 
+
+		valtype(x)==AbstractMatrix{Float64} && return x
+
+		return OrderedDict(k=>to_myMatrix(v, D) for (k,v) in x)
+
+	end 
+
+	return OrderedDict(map(sort(collect(keys(x)), by=string)) do k
+
+									 k => to_myMatrix(x[k], D)
+
+								 end)
+
+end 
+
+
+function to_myODict(x::Utils.List, D::Union{Int64,Nothing}=nothing
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	isempty(x) && return OrderedDict()
+
+	all(isa.(x,Pair)) || return OrderedDict("A"=>to_myMatrix(x, D))
+	
+	return OrderedDict(k=>to_myMatrix(v, D) for (k,v) in x)
+
+end
+
+
+function to_myODict(x::AbstractMatrix, D::Union{Int64,Nothing}=nothing
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	OrderedDict("A"=>to_myMatrix(x, D))
 
 end
 
 
 
-function CombsOfVecs((A,c)::Tuple{<:Union{Lattice, AbstractMatrix{<:Real}},
-																	AbstractMatrix{<:Real}}; 
+function to_myODict(x::Pair, D::Union{Int64,Nothing}=nothing
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	OrderedDict(x.first => to_myMatrix(x.second, D))
+
+end
+
+
+function to_myODict(x, latt::Lattice
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	to_myODict(x, VecDim(latt))
+
+end 
+
+function to_myODict(x, A::AbstractMatrix
+									 )::OrderedDict{Any, AbstractMatrix{Float64}}
+
+	to_myODict(x, size(A,1))
+
+end 
+
+#to_myODict(x...)::OrderedDict{Any, AbstractMatrix{Float64}} = to_myODict(x)
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function CombsOfVecs(A::AbstractMatrix{<:T}, coeff::AbstractMatrix{<:V}; dim=2)::AbstractMatrix{promote_type(T,V)} where T where V
+
+	dim==2 && return A*coeff
+
+	dim==1 && return coeff*A
+
+	error()
+
+end
+
+
+
+function CombsOfVecs(latt::Lattice, coeff; kwargs...)::AbstractMatrix{Float64}
+
+	CombsOfVecs(LattVec(latt), to_myMatrix(coeff, LattDim(latt)); kwargs...)
+
+end
+
+
+
+
+
+
+function CombsOfVecs(t::Tuple{<:Union{Lattice, AbstractMatrix{<:Real}},Any};
 										 kwargs...)::AbstractMatrix{Float64}
 
-	CombsOfVecs(A, c; kwargs...)
+	CombsOfVecs(t...; kwargs...)
 
 end 
 
@@ -247,14 +389,6 @@ end
 #
 #
 #---------------------------------------------------------------------------#
-
-function copy(latt::Lattice)
-
-	Lattice(latt.LattVec,
-					latt.Sublattices,
-					latt.Vacancies)
-
-end 
 
 
 
@@ -324,11 +458,18 @@ end
 #---------------------------------------------------------------------------#
 
 
-function EmptyPos(latt::Lattice)::AbstractMatrix{Float64}
+EmptyPos(D::Int64)::AbstractMatrix{Float64} = zeros(Float64, D, 0)
 
-	zeros(Float64, VecDim(latt), 0)
+EmptyPos(n::Nothing)::AbstractMatrix{Float64} = EmptyPos(0)
 
-end
+EmptyPos(latt::Lattice)::AbstractMatrix{Float64} = EmptyPos(VecDim(latt))
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
 
 
 
@@ -380,8 +521,8 @@ function VecDim(latt::Lattice)::Int
 	size(latt.LattVec,1)>0 && return size(latt.LattVec,1) 
 
 	for prop in [:Sublattices, :Vacancies], (k,v) in getproperty(latt, prop)
-			
-			size(v,1)>0 && return size(v,1)
+		
+		!isnothing(v) && size(v,1)>0 && return size(v,1)
 	
 	end 
 
@@ -510,60 +651,31 @@ end
 
 
 
-function Correct_LattCoeff((latt,n)::Tuple{Lattice, T})::AbstractMatrix{Int} where T
+function SquareInt_LattCoeff((latt,n)::Tuple{Lattice, T})::AbstractMatrix{Int} where T
 
-	Correct_LattCoeff(latt, n)
+	SquareInt_LattCoeff(latt, n)
 
 end
 														
 
-function Correct_LattCoeff(latt::Lattice, n::T)::AbstractMatrix{Int} where T
+function SquareInt_LattCoeff(latt::Lattice, n)::AbstractMatrix{Int}
 
-	@show n T  
+	n = to_myMatrix(n, latt)
 
-	if T<:Float64 || Utils.isList(T,Float64) || T<:AbstractMatrix{<:Float64} ||(
-												Utils.isList(n,Real) && any(e->isa(e,Float64),n))
+	tn = trunc.(n)
 
-		n1 = T<:AbstractMatrix ? n : vcat(n...)
-
-		if isapprox(trunc.(n1), n1, atol=TOLERANCE) 
-
-			return Correct_LattCoeff(latt, Int64.(trunc.(n1)))
-
-		end
+	if !isapprox(tn, n, atol=TOLERANCE) 
 
 		error("n is not an integer/an array of integers!")
 
+	end
 
-	elseif T<:Int64
-	
-		return Correct_LattCoeff(latt, LA.Diagonal(repeat([n], LattDim(latt))))
+	all(size(n).==LattDim(latt)) && return tn 
 
+	length(n)==LattDim(latt) && return LA.Diagonal(tn[:])
 
-	elseif Utils.isList(n,Real) && all(e->isa(e,Int),n) 
+	error("Incorrect size of the matrix 'n' provided")
 
-		if length(n)==LattDim(latt)
-
-			return Correct_LattCoeff(latt, LA.Diagonal(vcat(n)))
-
-		elseif length(n)==1
-
-			return Correct_LattCoeff(latt, LA.Diagonal(repeat([n[1]], LattDim(latt))))
-
-		end 
-
-		error("Incorrect length of the vector 'n' provided")
-
-
-	elseif T<:AbstractMatrix{Int}
-		
-		all(size(n) .== LattDim(latt)) && return n 
-			
-		error("Incorrect size of the matrix 'n' provided")
-
-	end 
-
-	error("Type '$T' of input 'n' not understood")
 
 end
 
@@ -602,6 +714,14 @@ function is_left(P0, P1, P2)
 
 end 
 
+function Order_PolygonVertices(V::AbstractMatrix; dim=2)
+
+	C = sum(V, dims=dim)[:]/size(V,dim) # center of the polygon
+
+	return sortslices(V, dims=dim, by = R->atan(R[2]-C[2], R[1]-C[1]))
+
+end 
+
 
 function prepare_polygon_vertices(V::AbstractMatrix; 
 																	order_vertices=false, dim=2)::AbstractMatrix
@@ -609,7 +729,7 @@ function prepare_polygon_vertices(V::AbstractMatrix;
 	if order_vertices
 
 		return prepare_polygon_vertices(
-								sortslices(V, dims=dim, by=R->atan(R[2],R[1]));
+								Order_PolygonVertices(V, dim=dim),
 								order_vertices=false, dim=dim)
 
 	end 
@@ -838,9 +958,9 @@ end
 #end 
 
 function parse_input_RsNs( latt::Union{Nothing,Lattice}=nothing;
-													 Rs::Union{Nothing,AbstractVecOrMat{<:Real}}=nothing,
+													 Rs=nothing,
 													 Ns=nothing,
-													 A::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
+													 A=nothing,
 													 StopStart=nothing,
 													 dim=2,
 													 kwargs...
@@ -852,38 +972,7 @@ function parse_input_RsNs( latt::Union{Nothing,Lattice}=nothing;
 
 	isnothing(A) && error("Cannot proceed with unknown vectors")
 
-
-#nr_vect = size(A,dim)
-#
-#dim==2: size(A,dim)==size(N,[2,1][dim])
-#
-#dim==1: size(N,dim)==size(A,[2,1][dim])
-
-
-#size([N,A][dim],dim) = size([A,N][dim],[2,1][dim])
-
-
-#@show Ns 
-#Correct_LattCoeff(latt, Ns)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	!isnothing(Ns) && return CombsOfVecs(A, 
-																			 if ndims(Ns)==2 Ns else
-[fill,reshape][ndims(Ns)+1](Ns, ([1,size(A,dim)][dim], [size(A,dim),1][dim]))
-																			end,
-																			 dim=dim)
+	!isnothing(Ns) && return CombsOfVecs(A, to_myMatrix(Ns, latt), dim=dim)
 
 	!isnothing(StopStart) && return CombsOfVecs10(A, StopStart...; dim=dim)
 
@@ -891,12 +980,23 @@ function parse_input_RsNs( latt::Union{Nothing,Lattice}=nothing;
 
 end
 
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+
 function Atoms_ManyUCs(atoms::AbstractMatrix{<:Real},
 											 ucs::AbstractMatrix{<:Real};
-											 kwargs...)::AbstractMatrix{Float64}
+											 dim::Int=2, kwargs...)::AbstractMatrix{Float64}
 
-	Algebra.FlatOuterSum(atoms, ucs; dim=get(kwargs,:dim,2))
-
+	Algebra.FlatOuterSum(atoms, ucs; dim=dim)
 
 end 
 
@@ -906,23 +1006,15 @@ function Atoms_ManyUCs(atoms::AbstractMatrix{<:Real},
 											 A::AbstractMatrix{<:Real};
 											 kwargs...)::AbstractMatrix{Float64}
 
-	Atoms_ManyUCs(atoms, parse_input_RsNs(;Ns=ns, A=A, dim=2, kwargs...))
+	Atoms_ManyUCs(atoms, parse_input_RsNs(;Ns=ns, A=A, kwargs...))
 
 end 
 
 
 
-function Atoms_ManyUCs(latt::Lattice;
-#											 UCs::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
-#											 Ns::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
-#											 A::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
-#											 StopStart=nothing,
-											 kwargs...)::AbstractMatrix{Float64}
+function Atoms_ManyUCs(latt::Lattice; kwargs...)::AbstractMatrix{Float64}
 
-	Atoms_ManyUCs(PosAtoms(latt; dim=2, kwargs...),
-								parse_input_RsNs(latt; dim=2, kwargs...)
-								)
-	
+	Atoms_ManyUCs(PosAtoms(latt; kwargs...), parse_input_RsNs(latt; kwargs...))
 
 end
 
@@ -945,9 +1037,12 @@ function Superlattice(latt::Lattice, n; kwargs...)
 end
 
 
+
+
+
 function Superlattice(Components::Utils.List, Ns::Utils.List; Labels=nothing, kwargs...)
 
-	Ns = Correct_LattCoeff.(zip(Components,Ns))
+	Ns = SquareInt_LattCoeff.(zip(Components,Ns))
 
 	Supervectors = CombsOfVecs(Components[1], Ns[1])
 
@@ -982,7 +1077,7 @@ function Superlattice(Components::Utils.List, Ns::Utils.List; Labels=nothing, kw
 
 			all_atoms = map(zip(Components,Ns)) do (latt,ns)
 
-				Atoms_ManyUCs(latt; Ns=ns, A=Supervectors, label=k, kind=p)
+				Atoms_ManyUCs(latt; Ns=ns, label=k, kind=p)
 			
 			end 
 
@@ -1014,6 +1109,27 @@ function Superlattice(Components::Utils.List, Ns::Utils.List; Labels=nothing, kw
 
 end
 
+
+
+
+
+function Superlattice!(latt::Lattice, n; kwargs...)
+
+	N = SquareInt_LattCoeff(latt, n)
+	
+	ucs = ucs_in_UC(N; kwargs...)
+
+	for p in [:Sublattices, :Vacancies], k in sublatt_labels(latt; kind=p)
+
+		getproperty(latt, p)[k] = Atoms_ManyUCs(latt; Ns=ucs, label=k, kind=p)
+
+	end
+
+	latt.LattVec = CombsOfVecs(latt, N)
+
+	return latt
+
+end
 
 
 
@@ -1134,8 +1250,40 @@ function AddAtoms!(latt::Lattice, positions=[], labels="A"; kind=:Sublattices)
 end 
 
 
+function AddAtoms(latt::Lattice, positions=[], labels="A"; kind=:Sublattices)
+
+	positions = Initialize_PosAtoms(latt, positions)
+
+	new_labels, inds = Utils.Unique(
+												parse_input_sublattices(latt, labels, 
+																								size(positions,2), string),
+												inds=:all) 
 
 
+	function act_on_atoms(K::Symbol, D::AbstractDict)
+	
+		kind!=K && return D
+	
+		return map(findall(!isempty, inds)) do not_empty
+
+			k,R = new_labels[not_empty], view(positions, :, inds[not_empty])
+
+			return Pair(k, haskey(D, k) ? hcat(D[k], R) : R)
+
+		end 
+
+	end 
+
+	return Lattice(latt, act_on_atoms=act_on_atoms)
+
+end
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
 
 
 
@@ -1164,23 +1312,24 @@ function ShiftAtoms!(latt::Lattice; n=nothing, r=nothing, kind=:Both)
 end
 
 
-function Shift_Atoms(latt::Lattice; n=nothing, r=nothing, kind=:Both)
+function ShiftAtoms(latt::Lattice; n=nothing, r=nothing, kind=:Both)
 
 	R = parse_input_RsNs(latt; Ns=n, Rs=r, dim=2)
 
-	return Lattice(
+	shift(v::AbstractMatrix{Float64}, l) = Pair(l, v.+R)
 
-					LattVec(latt),
 
-					map([:Sublattices, :Vacancies]) do K 
-							
-						D = getproperty(latt, K)
+	kind==:Both && return Lattice(latt, act_on_atoms=shift)
 
-						kind in [:Both,K] || return copy(D)
 
-						return [l=>D[l].+R for l in sublatt_labels(latt, kind=K)]
+	function act_on_atoms(K::Symbol, D::AbstractDict)
+	
+		kind==K ? [shift(v,l) for (l,v) in D] : D
 
-					end...)
+	end 
+
+	return Lattice(latt, act_on_atoms=act_on_atoms)
+
 
 end 
 
@@ -1193,7 +1342,7 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Reduce_Dim(latt::Lattice; dim=nothing, complement=false)
+function ReduceDim(latt::Lattice, dim=nothing; complement=false)
 
 	if complement && (isnothing(dim) || length(dim)>1)
 		
@@ -1201,26 +1350,19 @@ function Reduce_Dim(latt::Lattice; dim=nothing, complement=false)
 
 	end 
 
+	complement && return Lattice(latt, act_on_vectors=v->v[:, dim[1]:dim[1]])
 
-	keep_dims = if complement 
+	isnothing(dim) && return Lattice(latt, act_on_vectors=EmptyPos)
 
-					[dim[1]]
+	keep_dims = filter(!in(vcat(dim...)),1:LattDim(latt))
 
-							else 
-
-					isnothing(dim) ? [] : filter(!in(vcat(dim...)),1:LattDim(latt))
-
-						end
-
-	return Lattice(LattVec(latt)[:,keep_dims],
-								 copy(latt.Sublattices),
-								 copy(latt.Vacancies)
-								 )
+	return Lattice(latt, act_on_vectors=v->v[:, keep_dims])
 
 end 
 
+
    
-function Reduce_Dim!(latt::Lattice; dim=nothing, complement=false)
+function ReduceDim!(latt::Lattice, dim=nothing; complement=false)
 
 	if complement && (isnothing(dim) || length(dim)>1)
 		
@@ -1239,13 +1381,312 @@ function Reduce_Dim!(latt::Lattice; dim=nothing, complement=false)
 
 						end
 
-	latt.LattVec = latt.LattVec[:,keep_dims]
+	latt.LattVec = latt.LattVec[:, keep_dims]
 
 	return latt 
 
 end 
 
 
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function SurfaceAtoms(latt::Lattice, bondlength=nothing; kwargs...)
+
+	LattDim(Latt)==0 || error()
+
+	SurfaceAtoms(PosAtoms(latt; kwargs...), bondlength)
+
+end 
+
+
+function SurfaceAtoms(atoms::AbstractMatrix{Float64})
+
+#	size(atoms,2) > 5000 && error("Too many atoms")
+#
+#
+#	Ds = OuterDist(atoms, atoms)
+#
+#	Utils.Uniqu1
+#
+#	UD = Utils.Unique(Ds; tol=TOLERANCE, sorted=true)[2:end]
+#
+#
+#	bonds = Algebra.get_Bonds(atoms;
+#														inds=true, pos=false, asmatrices=true)
+#
+#
+#	bonds[
+#
+#
+
+#convex hull
+
+
+end 
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function Maximize_ContactSurface(starting_points, direction; vertices=nothing, ordered_vertices=nothing)
+	
+
+#    from shapely.geometry import LinearRing,MultiPoint,LineString
+#    from shapely.ops import nearest_points
+#  
+#    if ordered_vertices is not None:
+#        V = ordered_vertices
+#    else:
+#        V = Order_PolygonVertices(vertices)
+#   
+#    poly_sides,poly_verts = LinearRing(V),MultiPoint(V)
+#  
+#
+#    shifts = np.zeros((2,2))
+#
+#    for start in starting_points:
+#
+#        line = LineString([start,start+direction])
+#       
+#        if poly_sides.intersection(line).is_empty:
+#        
+#            Ps = [p.coords for p in nearest_points(line,poly_verts)]
+#
+#            s = np.diff(Ps,axis=0).reshape(-1)
+#            
+#            for (i,shift) in enumerate(shifts):
+#
+#                if np.dot(shift,s) >= np.dot(shift,shift):
+#
+#                    shifts[i] = s
+#
+#    norms = np.linalg.norm(shifts,axis=1)
+#
+#    if any(norms<1e-10):
+#        return shifts[np.argmax(norms),:]
+#
+#    return shifts[np.argmin(norms),:]
+#
+end 
+
+function Align_toAtoms(latt::Lattice, Atoms::AbstractMatrix{Float64}, shift_dir::Int=+1; bonds=nothing)
+
+	# shift_dir = +/- i means positive/negative a_i
+	# slowed down if all atoms provided instead of the surface ones
+
+	if isnothing(bonds)
+		
+		c = Utils.DistributeBallsToBoxes.([-1,1], LattDim(latt))
+
+		bonds = CombsOfVecs(latt, vcat(c...))
+
+	end 
+
+	Atoms = Order_PolygonVertices(Atoms)
+
+
+#PointInPolygon_wn(SurfaceAtoms; order_vertices=false)
+
+
+
+
+#    def is_inside(l):
+#
+#        for a in l.PosAtoms():
+#    #            if Geometry.PointInPolygon_wn(a,SurfaceAtoms):
+#
+#                return True
+#
+#        return False
+#
+#
+#    while is_inside(self):
+#
+#        self.Shift_Atoms(n=np.sign(-shift_dir),method="self")
+#
+#    while self.Dist_to_is(SurfaceAtoms,0).any():
+#
+#        self.Shift_Atoms(n=np.sign(-shift_dir),method="self")
+
+
+
+	dmax = maximum(Algebra.OuterDist(Atoms, Atoms))*5
+
+
+	dmax=10
+
+	direction = sign(shift_dir)*LattVec(latt)[:,abs(shift_dir)]
+
+
+	longdir = 2*dmax * LA.normalize(direction)
+
+
+#	ShiftAtoms!(latt, r=-longdir/2)
+
+
+	Maximize_ContactSurface(PosAtoms(latt),
+													longdir,
+													ordered_vertices=Atoms)
+
+#
+#    self.Shift_Atoms(r=Geometry.Maximize_ContactSurface(
+#                            self.PosAtoms(),
+#                            longdir,
+#                            ordered_vertices=SurfaceAtoms),
+#                    method="self")
+
+
+	return latt 
+
+#
+#    contact = Geometry.ClosestContact_LinesPolygon(
+#		self.PosAtoms(),
+#		longdir,
+#                ordered_vertices=SurfaceAtoms)
+#
+#    rij = contact["stop"] - contact["start"]
+#
+#    out = self.Shift_Atoms(r=rij)
+#
+#	# Now the lead head (atom 'i') coincides with one surface atom 'j'
+#	# We want to go back such that there i and j don't overlap anymore
+#	# This will enable a bond between i and j
+#	# A bond b is 'going back' if cos(b,rij) is as negative as possible
+#
+#    bonds = bonds[np.argsort(bonds/la.norm(bonds,axis=1,keepdims=True)@rij)]
+#
+#
+#    def good(L):
+#
+#      for n in range(2):
+#
+#        if L.Dist_to_is(n*direction+SurfaceAtoms,0).any():
+#
+#          return False
+#
+#      return True
+#
+#
+#
+#    while not good(out):
+#
+#      for s in bonds:
+# 
+#        out2 = out.Shift_Atoms(r=s)
+#
+#        if good(out2):
+#
+#          return out2
+#
+#      out = out.Shift_Atoms(r=bonds[0])
+#
+#    return out
+#
+
+
+	nothing
+
+
+end 
+
+
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function plot(latt::Lattice)
+
+	Rs = PosAtoms(latt)
+
+	Plots.scatter(Rs[1,:],Rs[2,:])
+
+end 
+
+function plot!(latt::Lattice;kwargs...)
+
+	Rs = PosAtoms(latt)
+
+	Plots.scatter!(Rs[1,:],Rs[2,:];kwargs...)
+
+end 
+
+
+function plot(latts...)
+
+	plot(latts[1])
+
+	for latt in latts[2:end-1]
+
+		plot!(latt)
+
+	end 
+
+	atoms = hcat([PosAtoms(l) for l in latts]...)
+
+	@show size(atoms)
+import 2libs 
+
+	A = collect(eachcol(atoms))
+@time h = ConcaveHull.concave_hull(A)
+	h = hcat(h.vertices...)
+
+	xlim,ylim = map(extrema.(eachrow(hcat(atoms,h)))) do lim 
+		lim .+ (lim[2]-lim[1])*0.05*[-1,1]
+								end
+
+#	h = Order_PolygonVertices(h; dim=2)
+
+
+B = collect(transpose(atoms))
+
+@time CH = QHull.chull(B)
+
+
+CH = transpose(B[CH.vertices,:])
+
+#	Plots.plot!(h[1,:],h[2,:])
+	Plots.plot!(CH[1,:],CH[2,:])
+
+
+
+
+	plot!(latts[end],xlims=xlim,ylims=ylim,ratio=1)
+
+
+#	extrema.(PosAtoms.(latts),dims=2)
+
+
+
+
+#	return map(latts) do latt
+#
+#		Rs = PosAtoms(latt)
+#
+#		return Plots.scatter!(Rs[1,:],Rs[2,:])
+#
+#	end 
+#
+
+
+end 
 
 
 
