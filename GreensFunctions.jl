@@ -67,7 +67,7 @@ GF(g::AbstractMatrix) = g
 
 SelfEn(U::AbstractMatrix,g::AbstractMatrix) =  U'*g*U
 
-SelfEn((U,g)) = SelfEn(U,g)
+SelfEn((U,g)::Tuple{AbstractMatrix,AbstractMatrix}) = SelfEn(U,g)
 			# if one tuple is given
 			
 SelfEn(args...) = sum(SelfEn.(args))
@@ -442,17 +442,6 @@ end
 
 
 
-#===========================================================================#
-#
-# norm of the GF eigenvalues
-#
-#---------------------------------------------------------------------------#
-
-#function GFmagnitude(g)#,Energies,filename=nothing)
-
-#	LA.norm(LA.eigvals(g))
-
-#end
 
 #===========================================================================#
 #
@@ -495,7 +484,7 @@ function GF_SanchoRubio(Energy,H_intracell,H_intercell;
 
   Errors = zeros(max_iter)
 
-	function updateErrors(iter,alpha,beta)
+	function updateErrors!(iter,alpha,beta)
 
     Errors[iter] = LA.norm(alpha) + LA.norm(beta)
 
@@ -503,7 +492,7 @@ function GF_SanchoRubio(Energy,H_intracell,H_intercell;
 
   function converged(iter)
 
-		if iter>=3 && all(Errors[iter-3+1:iter] .< tol)
+		if iter>=3 && all(<(tol), Errors[iter-3+1:iter])
 
 			return true
 
@@ -530,7 +519,7 @@ function GF_SanchoRubio(Energy,H_intracell,H_intercell;
 									 epsDualSurf=epsBulk,
 									 i=1)
 
-		updateErrors(i,alpha,beta)
+		updateErrors!(i,alpha,beta)
 
 		converged(i) && return GF.(Energy,[epsBulk,epsSurf,epsDualSurf][desired_keys])
 			

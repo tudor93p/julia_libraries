@@ -12,10 +12,370 @@ import DelimitedFiles; const DlmF = DelimitedFiles
 import FileIO#,JLD
 
 using OrderedCollections:OrderedDict
-
+import Random
 
 
 const List = Union{AbstractVector, AbstractSet, Tuple, Base.Generator}
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function Backtracking(data,
+#											root::Function,
+											possible_extensions::Function, 
+											promising_candidate::Function, 
+											accept_sol::Function,
+											solutions::Vector{Dict}=Dict[],
+											)::Vector{Dict}
+
+	Backtracking(data,
+#							 root,
+							 possible_extensions, 
+							 promising_candidate, 
+							 accept_sol, 
+							 (data, solutions, candidate) -> push!(solutions, candidate),
+							 solutions
+							)
+end 
+
+
+function Backtracking(data,
+#											root::Function,
+											possible_extensions::Function, 
+											promising_candidate::Function, 
+											accept_sol::Function, 
+											output::Function,
+											solutions::Vector{Dict}=Dict[],
+											)::Vector{Dict}
+
+	function backtrack!(data, solutions, candidate)
+
+
+		promising_candidate(data, candidate) || return true 
+
+		if accept_sol(data, candidate) 
+			
+			carry_on = output(data, solutions, candidate)
+			
+			return !isa(carry_on,Bool) || carry_on
+
+		end 
+
+
+		for extension in possible_extensions(data, candidate)
+
+			carry_on = backtrack!(data, solutions, extension)
+
+			isa(carry_on,Bool) && !carry_on && return false 
+	
+		end 
+
+	end 
+
+
+	backtrack!(data, solutions, Dict())#root(data))
+
+	return solutions 
+
+end 
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+function findLostDims(A::AbstractArray, B::Number, args...)::Vector{Int}
+
+	1:ndims(A)
+
+end
+
+
+function findLostDims(A::AbstractArray, B::AbstractArray, possible_dims=[])::Vector{Int}
+
+	@assert ndims(A)>=ndims(B) "B cannot be subarray of A"
+
+
+	#root((sA,sB,p))::Dict{Int,Int} = Dict{Int,Int}()
+
+
+	function possible_extensions((sA,sB,p), candidate::Dict)::Vector{Dict}
+		
+		n = length(candidate)+1
+
+		n>length(sB) && return []
+
+		length(sA)==length(sB) && return [Dict(i=>i for i in 1:length(sA))]
+
+		start = max(maximum(values(candidate),init=0)+1,n)
+
+		stop = n + length(sA)-length(sB)
+
+		return [merge(candidate, Dict(n=>i)) for i in start:stop]
+
+	end 
+		
+
+
+	function promising_candidate((sA,sB,p), candidate::Dict)::Bool
+
+		if !isempty(candidate) 
+
+			n = length(candidate)
+
+			if length(sA)-length(sB)>0 && !isempty(p) 
+
+				count(in(values(candidate)),p)>length(sA)-length(sB) && return false
+
+			end 
+
+			in(sB[n], [1, sA[candidate[n]]]) || return false 
+
+			n<2 || candidate[n]>candidate[n-1] || return false 
+
+		end
+
+		return true 
+			
+	end 
+
+
+
+	function accept_sol((sA,sB,p), candidate::Dict)::Bool
+
+		length(candidate)==length(sB) && issubset(values(candidate),1:length(sA))
+
+	end 
+
+	solutions = Backtracking(
+							 (size(A),size(B),vcat(possible_dims...)), 
+#							 	root,
+							 	possible_extensions,
+							 	promising_candidate,
+							 	accept_sol,
+							 	)
+
+	out = [setdiff(1:ndims(A), values(s)) for s in solutions]
+
+	length(out)==1 && return out[1]
+
+	lengths(out)==0 && error("No solution was found. Check the sizes: ",size(A)," ",size(B))
+
+	error("\n",out,"\n'A' has the same size along multiple dimensions and the lost dimensions cannot be determined uniquely" )
+
+end 
+
+
+
+function restoreLostDims(f::Function, A::AbstractArray, 
+												 args...)::AbstractArray
+
+	restoreLostDims(A, f(A), args...)
+
+end
+
+function restoreLostDims(A::AbstractArray, B::AbstractArray,
+												 args...)::AbstractArray
+
+	lost_dims = findLostDims(A, B, args...)
+
+	isempty(lost_dims) && return B
+
+	new_size = (in(i,lost_dims) ? 1 : size(A,i) for i=1:ndims(A))
+
+	return reshape(B, new_size...)
+
+end 
+
+
+#lost_dims = findLostDims(A, B, dims) 
+
+
+
+
+function newPosIndex_afterLostDims(A::AbstractArray, B::AbstractArray, 
+																	 args...)::Function
+	
+	lost_dims = findLostDims(A, B, args...)
+
+	return n -> n - count(<(n), lost_dims)
+
+end 
+
+function newPosIndex_afterLostDims(n::Int, args...)::Int
+
+	newPosIndex_afterLostDims(args...)(n)
+
+end 
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+function ApplyF_IndsSets(f::Function, 
+												 A::AbstractArray, 
+												 slice_dim::Int, 
+												 inds::AbstractVector{<:AbstractVector{Int}};
+												 kwargs...
+												 )::AbstractVector{AbstractArray}
+
+	ApplyF_IndsSets(f, A, slice_dim, inds, setdiff(1:ndims(A),slice_dim);
+									kwargs...)
+
+end 
+
+
+
+
+function ApplyF_IndsSets(f::Function, 
+												 A::AbstractArray, 
+												 slice_dim::Int, 
+												 inds::AbstractVector{<:AbstractVector{<:Int}},
+												 f_dim::Union{Int,AbstractVector{Int}};
+												 keepdims=false,
+												 )::AbstractVector{AbstractArray}
+
+	isempty(intersect(slice_dim,f_dim)) || error("Axes must be disjunct")
+
+	a = selectdim(A, slice_dim, vcat(inds...))
+
+	if keepdims
+
+		return Slice_LikeArraysInList(inds, 
+																	restoreLostDims(f, a, f_dim), 
+																	slice_dim)
+	end 
+
+	b = f(a)
+
+	return Slice_LikeArraysInList(
+								inds, b, 
+								newPosIndex_afterLostDims(slice_dim, a, b, f_dim)
+												 )
+
+end
+
+function ApplyF_IndsSets_(
+													f::Function, 
+												  A::AbstractArray, 
+												  slice_dim::Int, 
+												  inds::AbstractVector{<:AbstractVector{<:Int}},
+												  f_dim::Union{Int,AbstractVector{Int}};
+												  keepdims=false,
+												  )::AbstractVector{AbstractArray}
+
+	map(inds) do i
+
+		a = selectdim(A, slice_dim, i) 
+	
+		return keepdims ? restoreLostDims(f, a, f_dim) : f(a)
+
+	end 
+
+end 
+
+
+function ApplyF_IndsSets_Check(args...; kwargs...)
+
+
+	result1 = ApplyF_IndsSets(args...; kwargs...)
+
+	@time result1= ApplyF_IndsSets(args...; kwargs...)
+	
+	result2 = ApplyF_IndsSets_(args...; kwargs...)
+
+	@time result2 = ApplyF_IndsSets_(args...; kwargs...)
+
+
+	for p in zip(result1,result2)
+
+		if isapprox(p...) 
+			
+			println("test passed")
+
+		else 
+
+			error("test not passed")
+
+		end 
+
+	end
+
+	return result1
+
+
+end 
+
+
+
+
+
+
+#===========================================================================#
+#
+#
+#
+#---------------------------------------------------------------------------#
+
+
+
+function mapslices_dropLostDims(f::Function, A::AbstractArray, dims)
+
+	dropLostDims(A, mapslices(f, A, dims=dims), dims)
+
+end 
+
+function dropLostDims(f::Function, A::AbstractArray, dims)
+
+	dropLostDims(A, f(A), dims)
+
+end 
+
+function dropLostDims(A::AbstractArray, B::AbstractArray, dims)
+
+	not_lost_dims = setdiff(dims, findLostDims(A, B, dims))
+
+	isempty(not_lost_dims) && return B
+
+	return dropdims(B, dims=Tuple(not_lost_dims))
+
+end 
+
+
+function softDropdims(A::AbstractArray, dims)
+
+	D = intersect(findall(size(A).==1),dims)
+
+	isempty(D) && return A
+
+	return dropdims(A, dims=Tuple(D))
+
+end 
+
+#function softDropdims(f::Function, A::AbstractArray, dims)
+#
+#	B = f(A) 
+#
+#	lost_dims = findLostDims(A, B, dims)
+#	
+#end 
+
+
+
 
 #===========================================================================#
 #
@@ -196,6 +556,21 @@ function Unique!(V::AbstractArray{T}; sorted=false, kwargs...) where T
 
 end
 
+function tolNF(tol::Real)
+
+	if isa(tol,Int)
+		
+		return tol,10.0^(-tol)
+
+	elseif isa(tol,Float64)
+
+		tol==0.0 && return 50, tol
+	
+		return Int(ceil(-log10(tol))), tol
+
+	end 
+
+end 
 
 
 function Unique(V::AbstractArray{T}; 
@@ -203,10 +578,13 @@ function Unique(V::AbstractArray{T};
 								sorted=false,
 								check_type=true) where T
 
+
+
 #	v isa AbstractArray &&
+#
 #	isList(v) || error("Type ",typeof(v)," not supported.")
 
-	if !check_type || is_exact(T) || all(is_exact.(typeof.(V)))
+	if !check_type || is_exact(T) || all(is_exact ∘ typeof, V)
 
 		U = (sorted ? sort : identity)(unique(V))
 	
@@ -225,15 +603,20 @@ function Unique(V::AbstractArray{T};
 	end 
 
 
+	 
 	function get_newV()
 
-		is_float(T) && return round.(V, digits= Int(ceil(-log10(tol))))
+		ntol,ftol = tolNF(tol)
+
+		ftol==0.0 && return V 
+
+		is_float(T) && return trunc.(V, digits=ntol)
 
 		fs, newT = typeof.(V) |> t -> (findall(is_float, t), promote_type(t...))
 
 		W = AbstractArray{newT}(V)
 	
-		W[fs] = round.(W[fs], digits=Int(ceil(-log10(tol))))
+		W[fs] = trunc.(W[fs], digits=ntol)
 
 		return W
 
@@ -443,29 +826,37 @@ end
 #---------------------------------------------------------------------------#
 
 
+# Base function mapslices(f, y; dims=dim)
 
-function ApplyF_OnAxis(f::Function, y::AbstractArray, dim::Int64=1)
 
-	inds = setindex!(collect(Any, axes(y)), [:], dim)
 
-	i1 = first.(inds)
-
-	y_new1 = f(y[i1...])
-
-	y_new = zeros(eltype(y_new1),
-								setindex!(collect(size(y)), length(y_new1), dim)...)
-
-	y_new[i1...] = y_new1
-
-	for i in Base.Iterators.drop(Base.product(inds...),1)
-
-		y_new[i...] = f(y[i...])
-		
-	end
-
-	return y_new
-
-end
+#function ApplyF_OnAxis(f::Function, y::AbstractArray, dim::Int64=1)
+#
+#	inds = setindex!(collect(Any, axes(y)), [:], dim)
+#
+#	i1 = first.(inds)
+#
+#	array_entry(x::Real) = [x]
+#	array_entry(x::AbstractVector) = x
+#	
+#	y_new1 = array_entry(f(y[i1...]))
+#
+#	y_new1::AbstractVector
+#
+#	y_new = zeros(eltype(y_new1),
+#								setindex!(collect(size(y)), length(y_new1), dim)...)
+#
+#	y_new[i1...] = y_new1
+#
+#	for i in Base.Iterators.drop(Base.product(inds...),1)
+#
+#		y_new[i...] = array_entry(f(y[i...]))
+#		
+#	end
+#
+#	return y_new
+#
+#end
 
 
 
@@ -876,7 +1267,7 @@ end
 
 function DictKey_Symbol(d)
 
-  return Dict([Symbol(k)=>v for (k,v) in pairs(d)])
+  Dict([Symbol(k)=>v for (k,v) in pairs(d)])
 
 end
 
@@ -963,13 +1354,22 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Slice_LikeArraysInList(arrays, X, dims=1)
+function Slice_IndsSets(inds, X, dim=1)
 
-	i,f = fill(Colon(), dims-1), fill(Colon(), ndims(X)-dims)
+	Slice_LikeArraysInList(inds, selectdim(X, dim, vcat(inds...)), dim)
+
+end
+
+
+
+function Slice_LikeArraysInList(arrays, X, dim=1)
 
 	ms = cumsum([0;length.(arrays)]) |> B -> [B[j-1]+1:B[j] for j=2:length(B)]
 
-	return [X[i..., m, f...] for m in ms]
+	return [collect(selectdim(X, dim, m)) for m in ms] 
+
+
+#	return [X[i..., m, f...] for m in ms]
 
 #	isnothing(out_vector) && return inds
 
@@ -983,21 +1383,53 @@ end
 #
 #---------------------------------------------------------------------------#
 
-function Random_Items(list,n;distinct=true)
+function Random_Items(list, n=rand(axes(list,1)); distinct=true)
 
-  distinct && n > size(list,1) && error("Cannot have so many distinct items")
+	if distinct
+	
+		n==length(list) && return Random.shuffle(list)
 
-  new_list = []
+		n>length(list) && error("Cannot have so many distinct items")
 
-  while length(new_list) < n
-  
-    new_item = rand(axes(list,1))
- 
-    (distinct & new_item in new_list) || push!(new_list,new_item)
-  
-  end
+		return list[Random.randperm(length(list))[1:n]]
+	else 
 
-  return list[new_list]
+		return [rand(list) for i=1:n]
+
+	end 
+
+#	function possible_extensions((L,N), c) 
+#
+#		[merge(c,Dict(length(c)+1=>i)) for i in Random.shuffle(axes(L,1))]
+#
+#	end 
+#
+#	function promising_candidate((L,N), c) 
+#	
+#		length(c)<=N && allunique(values(c))
+#	
+#	end 
+#
+#	accept_sol((L,N), c) = length(c)==N
+#
+#	function output(data, solutions, c)
+#	
+#		push!(solutions, c) 
+#	
+#		return false 
+#	
+#	end 
+#
+#	sol = Backtracking((list,n,distinct), 
+#										 possible_extensions,
+#										 promising_candidate,
+#										 accept_sol,
+#										 output
+#										 )[1]
+#
+#	return [list[sol[i]] for i=1:n]
+
+
 
 end
 
@@ -1293,7 +1725,7 @@ function is_dict_or_JLDAW(D)
 
 	D isa AbstractDict && return true 
 
-	all(in(propertyNames(D)), [:keys, :values]) && return true
+	all(in(propertynames(D)), [:keys, :values]) && return true
 
 	return false 
 
@@ -1662,43 +2094,46 @@ end
 # function exsits already! 'mkpath'
 
 
-#function MakeDir(filepath)
-#
-##  a = split(strip(path,'/'),'/')
-#  a = split(filepath,'/')
-#
-#  for i in 1:length(a)-1
-#
-#    f = join(a[1:i],"/")
-#
-#    !isdir(f) && mkdir(f)
-#
-#  end
-#
-#  return filepath
-#
-#end
-#
-
 
 #===========================================================================#
 #
-# Add item to dictionary if "key" does not exist, 
-#		otherwise return existing value
+#
 #
 #---------------------------------------------------------------------------#
 
-#function Update_Dict(dict,key,f,args)
-#
-#  if !(key in keys(dict))
-#  
-#    dict[key] = f(args)
-#
-#  end
-#
-#  return dict[key]
-#
-#end
+function logspace(start::Real, stop::Real, Len::Int64)
+
+	exp.(range(log(start),log(stop),length=Len))
+
+end
+
+function uniqlogsp(start::Real, stop::Real, Len::Int64, tol::Real; Trunc=false)
+
+	ntol,ftol = tolNF(tol)
+
+	max_nr_steps = ftol>0 ? Int(floor(Float64(stop-start)/ftol)) : 100Len
+
+	steps_step = max(1,Int(round((max_nr_steps-Len)/100.0)))
+
+	for L in [Len:steps_step:max_nr_steps;max_nr_steps]
+
+		S = Unique(logspace(start, stop, L), tol=tol) 
+
+		if length(S)>=Len 
+			
+			s = S[Int.(round.(Rescale(1:Len,axes(S,1))))]
+
+			return Trunc ? trunc.(s,digits=ntol) : s
+
+		end 
+
+	end 
+
+	error("Interval too small or tolerance too high")
+
+
+end 
+
 
 
 #===========================================================================#
@@ -1731,13 +2166,6 @@ end
 #
 #---------------------------------------------------------------------------#
 
-
-function imap(fs,args...)
-
-
-
-
-end 
 
 
 

@@ -408,6 +408,8 @@ function gk_gv_vk_dictorJLDAW(T)
 end 
 
 
+
+
 function choose_obs_i(data::T; P=nothing, k=nothing, f="last") where T
 
 	getkeys,getvals,valofkey = gk_gv_vk_dictorJLDAW(T)

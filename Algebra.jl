@@ -376,13 +376,34 @@ end
 
 function ConvoluteVectorPacket(weights, values, centers, 
 															 delta, vectors::AbstractMatrix;
-															 get_weights=false) 
+															 dim=1,
+															 get_weights=false, normalize=true, 
+															 keepdims=true, kwargs...) 
 
-	W = getCombinedDistrib(weights, values, centers, delta)
+	W = getCombinedDistrib(weights, values, centers, delta;
+												 normalize=normalize)
 
-	v = view(vectors,axes(W,2),:) 
+	out = dim |> function multipl(dim)
+	
+					v = sum(
+									
+							if dim==1 
+						
+						 W*view(vectors, axes(W,2),:)
 
-	return get_weights ? (W*v,W) : W*v
+							elseif dim==2 
+								
+								view(vectors, :, axes(W,2))*transpose(W)
+
+							end,
+
+							dims=dim)
+
+							return keepdims ? v : dropdims(v, dims=dim)
+					
+					end 
+
+	return get_weights ? (out,W) : out
 
 end
 
@@ -868,7 +889,7 @@ end
 
 function getDistrib(name::String, args...; kwargs...)#::Function
 	
-	getDistrib(Symbol(name), args...; kwargs)
+	getDistrib(Symbol(name), args...; kwargs...)
 
 end 
 
@@ -892,7 +913,7 @@ function getDistrib(F::Function, args...; normalize=false)
 end 
 
 function getDistrib(D::myDistrib, args...; kwargs...)
-	
+
 	getDistrib(D.F, args...; kwargs...)
 
 end 
